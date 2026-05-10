@@ -23,7 +23,7 @@ export function StatusBar({ flash, error, taskCount, selected, inSession }: Prop
           {inSession ? "" : " · not in zellij (spawn disabled)"}
           {"  "}
           <Text>
-            j/k move · n new · enter focus · m merge · k kill · q quit
+            j/k move · n new · enter focus · m merge · K kill · q quit
           </Text>
         </Text>
       )}
