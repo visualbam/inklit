@@ -146,7 +146,7 @@ src/
     NewTaskPrompt.tsx  description prompt + agent picker
     FilterPrompt.tsx task board filter prompt
     HelpOverlay.tsx keybind reference
-    theme.ts       terminal-safe Replit-inspired color tokens
+    theme.ts       terminal-safe ANSI color tokens
     icons.ts       state → icon/color/label
 ```
 
