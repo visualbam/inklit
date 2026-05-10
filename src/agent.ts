@@ -21,6 +21,8 @@ export async function spawnAgent(opts: {
   description: string;
   agent: AgentKind;
   cwd?: string;
+  /** Optional pane id of an existing agent to stack onto. */
+  anchorPaneId?: string | null;
 }): Promise<SpawnResult> {
   const slug = slugify(opts.description);
   const paneId = await spawnPane({
@@ -28,10 +30,13 @@ export async function spawnAgent(opts: {
     command: "wt",
     args: ["switch", "-c", slug, "-x", opts.agent, "--", opts.description],
     cwd: opts.cwd,
+    anchorPaneId: opts.anchorPaneId,
   });
-  // Record the agent kind so later resumes know which CLI to relaunch.
-  // Best-effort: a state-file failure must not block the spawn from succeeding.
-  recordSpawn(slug, opts.agent).catch(() => {});
+  // Record agent kind + paneId so resume + poll-loop pane lookup work even
+  // after claude-code OSC-rewrites the pane title. Awaited so the next
+  // poll tick can read it from disk (~5-20ms cost; spawn already takes
+  // hundreds of ms because zellij + wt + agent boot).
+  await recordSpawn(slug, opts.agent, paneId).catch(() => {});
   return { slug, paneId };
 }
 
@@ -48,6 +53,8 @@ export async function resumeAgent(opts: {
   slug: string;
   agent: AgentKind;
   cwd?: string;
+  /** Optional pane id of an existing agent to stack onto. */
+  anchorPaneId?: string | null;
 }): Promise<SpawnResult> {
   const resumeArgs = resumeArgsFor(opts.agent);
   const paneId = await spawnPane({
@@ -55,8 +62,9 @@ export async function resumeAgent(opts: {
     command: "wt",
     args: ["switch", opts.slug, "-x", opts.agent, "--", ...resumeArgs],
     cwd: opts.cwd,
+    anchorPaneId: opts.anchorPaneId,
   });
-  recordResume(opts.slug, opts.agent).catch(() => {});
+  await recordResume(opts.slug, opts.agent, paneId).catch(() => {});
   return { slug: opts.slug, paneId };
 }
 

@@ -1,31 +1,52 @@
 import React, { useEffect, useMemo, useReducer, useRef } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { createHash } from "node:crypto";
 import { TaskList } from "./List.js";
 import { Inspector } from "./Inspector.js";
+import { MainVersionBar } from "./MainVersionBar.js";
 import { StatusBar } from "./StatusBar.js";
 import { DescriptionPrompt, AgentPicker } from "./NewTaskPrompt.js";
 import { ConfirmPrompt } from "./ConfirmPrompt.js";
+import { SendInputPrompt } from "./SendInputPrompt.js";
+import { FilterPrompt } from "./FilterPrompt.js";
+import { HelpOverlay } from "./HelpOverlay.js";
+import { UI } from "./theme.js";
 import {
-  listTasks,
+  listProject,
   gitDiff,
   gitFiles,
   gitLog,
+  gitReviewStats,
   detectWaiting,
   mergeToMain,
   removeWorktree,
   type StatusEntry,
 } from "../wt.js";
 import {
-  findPaneByName,
   inSession,
   dumpScreen,
   focusPaneByName,
+  focusPaneId,
+  focusOwnPane,
   closePaneByName,
+  closePaneById,
+  sendKeysToPaneId,
+  sendKeysToSlug,
+  panesSnapshot,
 } from "../zellij.js";
 import { spawnAgent, resumeAgent } from "../agent.js";
-import { getAgent, recordRemove } from "../state.js";
-import type { AgentKind, AppState, InspectorMode, Task } from "../model.js";
-import { initialState } from "../model.js";
+import { getAgent, loadAll, recordPane, clearPane, recordRemove } from "../state.js";
+import { notify } from "../notify.js";
+import type {
+  AgentKind,
+  AppState,
+  InspectorMode,
+  MainVersion,
+  ReviewStats,
+  Task,
+  TaskState,
+} from "../model.js";
+import { initialState, lifecycleForTask } from "../model.js";
 
 interface ModeContent {
   diff: string;
@@ -39,7 +60,12 @@ const EMPTY_CONTENT: ModeContent = { diff: "", log: "", agent: "", files: [] };
 type ScrollKind = "lineUp" | "lineDown" | "halfUp" | "halfDown" | "top" | "bottom";
 
 type Action =
-  | { type: "tasks/loaded"; tasks: Task[]; agents: Map<string, string> }
+  | {
+      type: "tasks/loaded";
+      tasks: Task[];
+      agents: Map<string, string>;
+      mainVersion: MainVersion;
+    }
   | { type: "tasks/error"; message: string }
   | { type: "select/next" }
   | { type: "select/prev" }
@@ -50,8 +76,10 @@ type Action =
   | { type: "mode/spawning" }
   | { type: "mode/confirmMerge" }
   | { type: "mode/confirmKill" }
+  | { type: "mode/confirmCloseAll" }
   | { type: "mode/merging" }
   | { type: "mode/killing" }
+  | { type: "mode/closingAll" }
   | { type: "mode/resumeAgentPicker"; slug: string }
   | { type: "mode/resuming" }
   | { type: "mode/list" }
@@ -60,6 +88,15 @@ type Action =
   | { type: "inspector/loading"; loading: boolean }
   | { type: "inspector/scroll"; kind: ScrollKind; maxLines: number }
   | { type: "newTask/setDescription"; value: string }
+  | { type: "mode/sendInput" }
+  | { type: "mode/sending" }
+  | { type: "mode/filter" }
+  | { type: "mode/help" }
+  | { type: "sendInput/setValue"; value: string }
+  | { type: "filter/set"; value: string }
+  | { type: "filter/clear" }
+  | { type: "task/reviewStats"; slug: string; stats: ReviewStats }
+  | { type: "task/merged"; slug: string; task: Task }
   | { type: "flash"; message: string | null }
   | { type: "error"; message: string | null }
   | { type: "chord/set"; key: string | null };
@@ -68,7 +105,7 @@ interface RenderState extends AppState {
   /** Per-slug per-mode cache. */
   content: Map<string, ModeContent>;
   inspectorLoading: boolean;
-  /** Live tail from `dump-screen` per running slug; feeds agent mode + waiting. */
+  /** Sampled pane tails keyed by slug; retained for backward-compatible reducer flow. */
   agentTails: Map<string, string>;
 }
 
@@ -99,6 +136,66 @@ function scrollKey(slug: string, mode: InspectorMode): string {
   return `${slug}:${mode}`;
 }
 
+function sortTasks(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => {
+    const rankDiff = urgencyRank(a) - urgencyRank(b);
+    if (rankDiff !== 0) return rankDiff;
+    return a.slug.localeCompare(b.slug);
+  });
+}
+
+function urgencyRank(task: Pick<Task, "state">): number {
+  switch (task.state) {
+    case "waiting":
+      return 0;
+    case "running":
+      return 1;
+    case "idle":
+      return 2;
+    case "ready":
+      return 3;
+    case "failed":
+      return 4;
+    case "merged":
+      return 5;
+  }
+}
+
+function matchesFilter(task: Task, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    task.slug,
+    task.subject,
+    task.path,
+    task.state,
+    lifecycleForTask(task),
+    task.shortSha,
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+function visibleTasksFor(tasks: Task[], query: string): Task[] {
+  return sortTasks(tasks).filter((task) => matchesFilter(task, query));
+}
+
+function firstVisibleSlug(tasks: Task[], query: string): string | null {
+  return visibleTasksFor(tasks, query)[0]?.slug ?? null;
+}
+
+function keepVisibleSelection(
+  selectedSlug: string | null,
+  tasks: Task[],
+  query: string
+): string | null {
+  if (selectedSlug && visibleTasksFor(tasks, query).some((t) => t.slug === selectedSlug)) {
+    return selectedSlug;
+  }
+  return firstVisibleSlug(tasks, query);
+}
+
 /** Total renderable units (lines or file rows) in the current inspector view. */
 function totalLinesFor(s: RenderState): number {
   const slug = s.selectedSlug;
@@ -106,6 +203,8 @@ function totalLinesFor(s: RenderState): number {
   const c = s.content.get(slug);
   if (!c) return 0;
   switch (s.inspectorMode) {
+    case "task":
+      return 7;
     case "diff":
       return c.diff ? c.diff.split("\n").length : 0;
     case "log":
@@ -124,7 +223,7 @@ function resolveOffset(
   totalLines: number,
   maxLines: number
 ): number {
-  const maxOffset = Math.max(0, totalLines - maxLines);
+  const maxOffset = maxOffsetFor(totalLines, maxLines);
   if (stored === undefined) {
     return mode === "agent" ? maxOffset : 0;
   }
@@ -132,35 +231,53 @@ function resolveOffset(
   return Math.min(stored, maxOffset);
 }
 
+function maxOffsetFor(totalLines: number, maxLines: number): number {
+  if (totalLines <= maxLines) return 0;
+  return Math.max(0, totalLines - Math.max(1, maxLines - 1));
+}
+
 function reducer(s: RenderState, a: Action): RenderState {
   switch (a.type) {
     case "tasks/loaded": {
-      const tasks = a.tasks;
+      const tasks = sortTasks(a.tasks);
       let selectedSlug = s.selectedSlug;
-      if (!selectedSlug || !tasks.find((t) => t.slug === selectedSlug)) {
-        selectedSlug = tasks[0]?.slug ?? null;
-      }
-      return { ...s, tasks, selectedSlug, error: null, agentTails: a.agents };
+      selectedSlug = keepVisibleSelection(selectedSlug, tasks, s.filterQuery);
+      return {
+        ...s,
+        mainVersion: a.mainVersion,
+        tasks,
+        selectedSlug,
+        error: null,
+        agentTails: a.agents,
+      };
     }
     case "tasks/error":
       return { ...s, error: a.message };
     case "select/next": {
-      const idx = s.tasks.findIndex((t) => t.slug === s.selectedSlug);
-      const next = s.tasks[Math.min(s.tasks.length - 1, idx + 1)] ?? s.tasks[0];
+      const visible = visibleTasksFor(s.tasks, s.filterQuery);
+      const idx = visible.findIndex((t) => t.slug === s.selectedSlug);
+      const next = visible[Math.min(visible.length - 1, idx + 1)] ?? visible[0];
       return { ...s, selectedSlug: next?.slug ?? null };
     }
     case "select/prev": {
-      const idx = s.tasks.findIndex((t) => t.slug === s.selectedSlug);
-      const prev = s.tasks[Math.max(0, idx - 1)] ?? s.tasks[0];
+      const visible = visibleTasksFor(s.tasks, s.filterQuery);
+      const idx = visible.findIndex((t) => t.slug === s.selectedSlug);
+      const prev = visible[Math.max(0, idx - 1)] ?? visible[0];
       return { ...s, selectedSlug: prev?.slug ?? null };
     }
     case "select/first":
-      return { ...s, selectedSlug: s.tasks[0]?.slug ?? null };
-    case "select/last":
       return {
         ...s,
-        selectedSlug: s.tasks[s.tasks.length - 1]?.slug ?? null,
+        selectedSlug: firstVisibleSlug(s.tasks, s.filterQuery),
       };
+    case "select/last":
+      {
+        const visible = visibleTasksFor(s.tasks, s.filterQuery);
+        return {
+          ...s,
+          selectedSlug: visible[visible.length - 1]?.slug ?? null,
+        };
+      }
     case "mode/newTaskDescription":
       return { ...s, mode: "newTaskDescription", newTaskDescription: "" };
     case "mode/newTaskAgent":
@@ -176,10 +293,14 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, mode: "confirmMerge", inspectorMode: "diff" };
     case "mode/confirmKill":
       return { ...s, mode: "confirmKill", inspectorMode: "diff" };
+    case "mode/confirmCloseAll":
+      return { ...s, mode: "confirmCloseAll" };
     case "mode/merging":
       return { ...s, mode: "merging" };
     case "mode/killing":
       return { ...s, mode: "killing" };
+    case "mode/closingAll":
+      return { ...s, mode: "closingAll" };
     case "mode/resumeAgentPicker":
       return {
         ...s,
@@ -194,9 +315,67 @@ function reducer(s: RenderState, a: Action): RenderState {
         mode: "list",
         newTaskDescription: "",
         pendingResumeSlug: null,
+        sendInputValue: "",
       };
-    case "inspector/setMode":
+    case "mode/sendInput":
+      // Snap inspector to the live agent transcript so the user can see
+      // exactly what they're typing into.
+      return {
+        ...s,
+        mode: "sendInput",
+        sendInputValue: "",
+        inspectorMode: "agent",
+      };
+    case "mode/sending":
+      return { ...s, mode: "sending" };
+    case "mode/filter":
+      return { ...s, mode: "filter" };
+    case "mode/help":
+      return { ...s, mode: "help" };
+    case "sendInput/setValue":
+      return { ...s, sendInputValue: a.value };
+    case "filter/set": {
+      const query = a.value;
+      return {
+        ...s,
+        filterQuery: query,
+        selectedSlug: keepVisibleSelection(s.selectedSlug, s.tasks, query),
+      };
+    }
+    case "filter/clear":
+      return {
+        ...s,
+        filterQuery: "",
+        selectedSlug: keepVisibleSelection(s.selectedSlug, s.tasks, ""),
+      };
+    case "task/reviewStats": {
+      const tasks = s.tasks.map((t) =>
+        t.slug === a.slug ? { ...t, review: a.stats } : t
+      );
+      return { ...s, tasks };
+    }
+    case "task/merged": {
+      const tasks = sortTasks(
+        s.tasks.map((t) => (t.slug === a.slug ? a.task : t))
+      );
+      return {
+        ...s,
+        tasks,
+        inspectorMode: "task",
+        selectedSlug: keepVisibleSelection(s.selectedSlug, tasks, s.filterQuery),
+      };
+    }
+    case "inspector/setMode": {
+      const selected = s.tasks.find((t) => t.slug === s.selectedSlug);
+      if (selected?.state === "merged" && a.mode !== "task") {
+        return {
+          ...s,
+          inspectorMode: "task",
+          flash: "Applied task has no worktree to inspect.",
+        };
+      }
       return { ...s, inspectorMode: a.mode };
+    }
     case "inspector/data":
       return {
         ...s,
@@ -210,7 +389,7 @@ function reducer(s: RenderState, a: Action): RenderState {
       const key = scrollKey(s.selectedSlug, s.inspectorMode);
       const isAgent = s.inspectorMode === "agent";
       const total = totalLinesFor(s);
-      const maxOffset = Math.max(0, total - a.maxLines);
+      const maxOffset = maxOffsetFor(total, a.maxLines);
       const half = Math.max(1, Math.floor(a.maxLines / 2));
       const current = resolveOffset(s.inspectorOffsets.get(key), s.inspectorMode, total, a.maxLines);
       let next = current;
@@ -241,8 +420,54 @@ function reducer(s: RenderState, a: Action): RenderState {
   }
 }
 
-const POLL_MS = 1500;
+const PROJECT_POLL_MS = 2500;
+const SCREEN_TICK_MS = 750;
+const SELECTED_SCREEN_POLL_MS = 1000;
+const BACKGROUND_SCREEN_POLL_MS = 6000;
+const DUMP_SCREEN_TIMEOUT_MS = 700;
 const AGENT_TAIL_LINES = 200;
+const REVIEW_STATS_TICK_MS = 2500;
+const REVIEW_STATS_POLL_MS = 10_000;
+const MERGED_FADE_MS = 30_000;
+
+interface ScreenCacheEntry {
+  paneId: string;
+  screen: string;
+  lastDumpMs: number;
+}
+
+interface ReviewStatsCacheEntry {
+  stats: ReviewStats;
+  lastProbeMs: number;
+}
+
+interface CompletedTaskEntry {
+  task: Task;
+  untilMs: number;
+}
+
+/**
+ * "Live" = a zellij pane backs the task. Idle counts: the pane is still
+ * there, the agent process is alive, the user just hasn't seen the screen
+ * change in a while. Focus/anchor flows treat it the same as running.
+ */
+function isLivePane(s: TaskState): boolean {
+  return s === "running" || s === "waiting" || s === "idle";
+}
+
+function screenTail(text: string): string {
+  const lines = text.split("\n");
+  return lines.slice(-AGENT_TAIL_LINES).join("\n");
+}
+
+/**
+ * After this many ms with no change in a running pane's viewport, we promote
+ * the task from `running` to `idle` so the dashboard distinguishes "agent is
+ * actively typing" from "agent has been frozen on a tool call." 30s is short
+ * enough to catch real stalls without flapping during normal pauses
+ * (file reads, model thinking) which usually resolve in <10s.
+ */
+const IDLE_AFTER_MS = 30_000;
 
 export function App() {
   const { exit } = useApp();
@@ -253,41 +478,203 @@ export function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const inSess = useMemo(() => inSession(), []);
   const fetchedRef = useRef<Map<string, number>>(new Map());
+  const refreshProjectRef = useRef<() => void>(() => {});
+  const latestTasksRef = useRef<Task[]>([]);
+  const latestSelectedSlugRef = useRef<string | null>(null);
+  const backgroundScanIndexRef = useRef(0);
+  const screenCacheRef = useRef<Map<string, ScreenCacheEntry>>(new Map());
+  const reviewStatsRef = useRef<Map<string, ReviewStatsCacheEntry>>(new Map());
+  const completedTasksRef = useRef<Map<string, CompletedTaskEntry>>(new Map());
+  const reviewScanIndexRef = useRef(0);
+  /** Last observed state per slug — used to fire one notification per transition. */
+  const prevStatesRef = useRef<Map<string, TaskState>>(new Map());
+  /**
+   * Per-slug pane viewport hash + when it last changed. Used to promote
+   * `running` to `idle` after IDLE_AFTER_MS without screen activity.
+   */
+  const screenHashRef = useRef<Map<string, { hash: string; sinceMs: number }>>(
+    new Map()
+  );
+  /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
+  const closingAllRef = useRef(false);
 
-  // Poll wt + zellij. dump-screen for each running pane to feed waiting + agent.
+  useEffect(() => {
+    latestTasksRef.current = state.tasks;
+    latestSelectedSlugRef.current = state.selectedSlug;
+  }, [state.tasks, state.selectedSlug]);
+
+  // Poll wt + zellij pane metadata only. Pane screen dumps are throttled in a
+  // separate sampler below so a few active agents cannot stall dashboard input.
   useEffect(() => {
     let cancelled = false;
     let timer: NodeJS.Timeout | null = null;
+    let running = false;
+    let queued = false;
 
-    const tick = async () => {
+    const schedule = () => {
+      if (!cancelled) timer = setTimeout(run, PROJECT_POLL_MS);
+    };
+
+    const run = async () => {
+      if (running) {
+        queued = true;
+        return;
+      }
+      running = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
       try {
-        const tasks = await listTasks();
+        // One worktrunk snapshot + one `zellij list-panes` + one state-file
+        // read per tick. Pane lookup per task is then prefer-by-id (stable),
+        // fall-back-to-title (works only before the agent OSC-rewrites it).
+        const [project, panes, records] = await Promise.all([
+          listProject(),
+          panesSnapshot(),
+          loadAll(),
+        ]);
+        const { tasks, mainVersion } = project;
         const agents = new Map<string, string>();
+        const adoptions: Array<[string, string]> = [];
+        const dropped: string[] = [];
         const refined = await Promise.all(
           tasks.map(async (t) => {
             try {
-              const pane = await findPaneByName(t.slug);
-              if (!pane) return { ...t, state: "ready" as const };
-              const paneId =
-                pane.pane_id ??
-                (typeof pane.id === "number" ? `terminal_${pane.id}` : null);
-              let screen = "";
-              if (paneId) {
-                screen = await dumpScreen(paneId);
-                if (screen) agents.set(t.slug, screen);
+              const recordedPaneId = records[t.slug]?.paneId;
+              // Primary: match by cwd. This is the only identifier that
+              // survives both OSC title rewrites (claude-code) and pane id
+              // churn (user closes pane and respawns). Worktree paths are
+              // unique per task, so collisions are impossible.
+              let pane = panes.byCwd.get(t.path);
+              // Secondary: stable paneId we recorded at spawn — works when
+              // cwd matching fails (e.g., agent chdir'd somewhere).
+              if (!pane && recordedPaneId) pane = panes.byId.get(recordedPaneId);
+              // Tertiary: title — only succeeds before OSC rewrite, so
+              // mostly catches just-spawned tasks.
+              if (!pane) {
+                const fallback = panes.byTitle.get(t.slug);
+                if (fallback) {
+                  pane = fallback;
+                  if (records[t.slug]) adoptions.push([t.slug, fallback.paneId]);
+                }
               }
+              // Adopt paneId via cwd hit too, so the state file stays
+              // accurate even when ids change across sessions.
+              if (pane && records[t.slug] && recordedPaneId !== pane.paneId) {
+                adoptions.push([t.slug, pane.paneId]);
+              }
+              if (!pane) {
+                if (recordedPaneId) dropped.push(t.slug);
+                return { ...t, state: "ready" as const, paneId: undefined };
+              }
+              const paneId = pane.paneId;
+              const cached = screenCacheRef.current.get(t.slug);
+              const screen = cached && cached.paneId === paneId ? cached.screen : "";
               const waiting = screen ? detectWaiting(screen) : false;
               return {
                 ...t,
                 state: waiting ? ("waiting" as const) : ("running" as const),
-                paneId: paneId ?? undefined,
+                paneId,
               };
             } catch {
               return t;
             }
           })
         );
-        if (!cancelled) dispatch({ type: "tasks/loaded", tasks: refined, agents });
+        // Persist adoptions / drops sequentially after the tick. Best-effort.
+        for (const [slug, pid] of adoptions) {
+          await recordPane(slug, pid).catch(() => {});
+        }
+        for (const slug of dropped) {
+          await clearPane(slug).catch(() => {});
+        }
+
+        // Idle promotion: hash each running pane's viewport; if unchanged for
+        // IDLE_AFTER_MS, flip the task to `idle` and surface idleSeconds for
+        // the row label. Keeps idle detection state out of the reducer so the
+        // UI stays a pure projection of the latest poll.
+        const now = Date.now();
+        const aliveSlugs = new Set<string>();
+        let finalTasks: Task[] = refined.map((t) => {
+          aliveSlugs.add(t.slug);
+          if (t.state !== "running") {
+            screenHashRef.current.delete(t.slug);
+            return t;
+          }
+          const cached = screenCacheRef.current.get(t.slug);
+          const screen =
+            cached && cached.paneId === t.paneId ? cached.screen : "";
+          if (!screen) return t;
+          const hash = createHash("sha1").update(screen).digest("hex");
+          const prev = screenHashRef.current.get(t.slug);
+          if (!prev || prev.hash !== hash) {
+            screenHashRef.current.set(t.slug, { hash, sinceMs: now });
+            return t;
+          }
+          const idleMs = now - prev.sinceMs;
+          if (idleMs < IDLE_AFTER_MS) return t;
+          return {
+            ...t,
+            state: "idle",
+            idleSeconds: Math.floor(idleMs / 1000),
+          };
+        });
+        for (const slug of [...screenHashRef.current.keys()]) {
+          if (!aliveSlugs.has(slug)) screenHashRef.current.delete(slug);
+        }
+        for (const slug of [...screenCacheRef.current.keys()]) {
+          if (!aliveSlugs.has(slug)) screenCacheRef.current.delete(slug);
+        }
+
+        // Attach cached review stats and keep recently-applied tasks visible
+        // briefly so the board acknowledges the completed action instead of
+        // making the row disappear immediately after `wt merge`.
+        finalTasks = finalTasks.map((t) => {
+          const cachedStats = reviewStatsRef.current.get(t.slug)?.stats;
+          return cachedStats ? { ...t, review: cachedStats } : t;
+        });
+        const boardSlugs = new Set(finalTasks.map((t) => t.slug));
+        for (const [slug, entry] of completedTasksRef.current) {
+          if (Date.now() > entry.untilMs) {
+            completedTasksRef.current.delete(slug);
+            continue;
+          }
+          if (boardSlugs.has(slug)) {
+            completedTasksRef.current.delete(slug);
+            continue;
+          }
+          finalTasks.push(entry.task);
+          boardSlugs.add(slug);
+        }
+        for (const slug of [...reviewStatsRef.current.keys()]) {
+          if (!boardSlugs.has(slug)) reviewStatsRef.current.delete(slug);
+        }
+
+        // Transition-based desktop notifications. Only fire when we've seen
+        // the slug before (so freshly-loaded tasks don't pop on startup) and
+        // the state actually changed. Keep the trigger list intentionally
+        // narrow — `running → waiting` is the "come back, the agent needs
+        // you" signal that justifies pulling the user out of their editor.
+        for (const t of finalTasks) {
+          const prev = prevStatesRef.current.get(t.slug);
+          if (!prev || prev === t.state) continue;
+          if (t.state === "waiting") {
+            notify("lazyagent", `${t.slug} is waiting for input`);
+          }
+        }
+        const nextStates = new Map<string, TaskState>();
+        for (const t of finalTasks) nextStates.set(t.slug, t.state);
+        prevStatesRef.current = nextStates;
+
+        if (!cancelled) {
+          dispatch({
+            type: "tasks/loaded",
+            tasks: finalTasks,
+            agents,
+            mainVersion,
+          });
+        }
       } catch (err) {
         if (!cancelled) {
           dispatch({
@@ -296,9 +683,103 @@ export function App() {
           });
         }
       } finally {
-        if (!cancelled) timer = setTimeout(tick, POLL_MS);
+        running = false;
+        if (queued && !cancelled) {
+          queued = false;
+          void run();
+          return;
+        }
+        schedule();
       }
     };
+
+    refreshProjectRef.current = () => {
+      if (running) queued = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      void run();
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+      refreshProjectRef.current = () => {};
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  // Throttled pane-screen sampler. The selected pane gets near-live updates;
+  // background panes are scanned round-robin for waiting/idle detection.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: NodeJS.Timeout | null = null;
+
+    const due = (task: Task, intervalMs: number, now: number) => {
+      const cached = screenCacheRef.current.get(task.slug);
+      if (!cached || cached.paneId !== task.paneId) return true;
+      return now - cached.lastDumpMs >= intervalMs;
+    };
+
+    const queueBackground = (
+      tasks: Task[],
+      selectedSlug: string | null,
+      now: number
+    ): Task | null => {
+      const background = tasks.filter((t) => t.slug !== selectedSlug);
+      if (background.length === 0) return null;
+      for (let i = 0; i < background.length; i++) {
+        const idx = (backgroundScanIndexRef.current + i) % background.length;
+        const task = background[idx];
+        if (!task || !due(task, BACKGROUND_SCREEN_POLL_MS, now)) continue;
+        backgroundScanIndexRef.current = (idx + 1) % background.length;
+        return task;
+      }
+      return null;
+    };
+
+    const updateTail = (slug: string, screen: string, prevScreen?: string) => {
+      const tail = screenTail(screen);
+      if (tail === screenTail(prevScreen ?? "")) return;
+      dispatch({ type: "inspector/data", slug, key: "agent", value: tail });
+    };
+
+    const tick = async () => {
+      const now = Date.now();
+      const selectedSlug = latestSelectedSlugRef.current;
+      const live = latestTasksRef.current.filter(
+        (t) => t.paneId && isLivePane(t.state)
+      );
+      const selected = live.find((t) => t.slug === selectedSlug) ?? null;
+      const toDump: Task[] = [];
+      if (selected && due(selected, SELECTED_SCREEN_POLL_MS, now)) {
+        toDump.push(selected);
+      }
+      const background = queueBackground(live, selectedSlug, now);
+      if (background) toDump.push(background);
+
+      for (const task of toDump) {
+        if (!task.paneId) continue;
+        const prev = screenCacheRef.current.get(task.slug);
+        const screen = await dumpScreen(task.paneId, {
+          timeoutMs: DUMP_SCREEN_TIMEOUT_MS,
+        });
+        if (cancelled) return;
+        if (!screen) continue;
+        screenCacheRef.current.set(task.slug, {
+          paneId: task.paneId,
+          screen,
+          lastDumpMs: Date.now(),
+        });
+        if (task.slug === latestSelectedSlugRef.current) {
+          updateTail(task.slug, screen, prev?.screen);
+        }
+      }
+
+      if (!cancelled) timer = setTimeout(tick, SCREEN_TICK_MS);
+    };
+
     tick();
     return () => {
       cancelled = true;
@@ -306,12 +787,87 @@ export function App() {
     };
   }, []);
 
-  // Push agent tails into per-slug content so Inspector renders without extra fetch.
+  // Background review-stat sampler. It updates the compact board indicators
+  // without making the main project poll wait on per-worktree git probes.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: NodeJS.Timeout | null = null;
+
+    const due = (task: Task, now: number) => {
+      if (task.state === "merged") return false;
+      const cached = reviewStatsRef.current.get(task.slug);
+      return !cached || now - cached.lastProbeMs >= REVIEW_STATS_POLL_MS;
+    };
+
+    const queueBackground = (
+      tasks: Task[],
+      selectedSlug: string | null,
+      now: number
+    ): Task | null => {
+      const background = tasks.filter((t) => t.slug !== selectedSlug);
+      if (background.length === 0) return null;
+      for (let i = 0; i < background.length; i++) {
+        const idx = (reviewScanIndexRef.current + i) % background.length;
+        const task = background[idx];
+        if (!task || !due(task, now)) continue;
+        reviewScanIndexRef.current = (idx + 1) % background.length;
+        return task;
+      }
+      return null;
+    };
+
+    const tick = async () => {
+      const now = Date.now();
+      const tasks = latestTasksRef.current.filter((t) => t.state !== "merged");
+      const selectedSlug = latestSelectedSlugRef.current;
+      const selected = tasks.find((t) => t.slug === selectedSlug) ?? null;
+      const toProbe: Task[] = [];
+      if (selected && due(selected, now)) toProbe.push(selected);
+      const background = queueBackground(tasks, selectedSlug, now);
+      if (background && !toProbe.some((t) => t.slug === background.slug)) {
+        toProbe.push(background);
+      }
+
+      for (const task of toProbe) {
+        const stats = await gitReviewStats(task.path);
+        if (cancelled) return;
+        reviewStatsRef.current.set(task.slug, {
+          stats,
+          lastProbeMs: Date.now(),
+        });
+        dispatch({ type: "task/reviewStats", slug: task.slug, stats });
+      }
+
+      if (!cancelled) timer = setTimeout(tick, REVIEW_STATS_TICK_MS);
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  // If the user switches to an already-sampled agent pane, show the cached tail
+  // immediately instead of waiting for the next selected-pane sampler tick.
+  useEffect(() => {
+    const slug = state.selectedSlug;
+    if (!slug || state.inspectorMode !== "agent") return;
+    const cached = screenCacheRef.current.get(slug);
+    if (!cached?.screen) return;
+    const tail = screenTail(cached.screen);
+    const existing = state.content.get(slug)?.agent;
+    if (existing !== tail) {
+      dispatch({ type: "inspector/data", slug, key: "agent", value: tail });
+    }
+  }, [state.selectedSlug, state.inspectorMode, state.content]);
+
+  // Legacy path for batches supplied by the project poll. Usually empty now:
+  // screen sampling moved out of the main refresh loop to avoid input stalls.
   useEffect(() => {
     for (const [slug, text] of state.agentTails) {
       // Only the last N lines to keep state small.
-      const lines = text.split("\n");
-      const tail = lines.slice(-AGENT_TAIL_LINES).join("\n");
+      const tail = screenTail(text);
       const existing = state.content.get(slug)?.agent;
       if (existing !== tail) {
         dispatch({ type: "inspector/data", slug, key: "agent", value: tail });
@@ -326,6 +882,7 @@ export function App() {
     const task = state.tasks.find((t) => t.slug === slug);
     if (!task) return;
     const mode = state.inspectorMode;
+    if (mode === "task") return;
     if (mode === "agent") return; // fed by poll loop
 
     const cacheKey = `${slug}:${mode}`;
@@ -382,8 +939,42 @@ export function App() {
         return;
       }
       if (state.mode === "spawning") return;
-      if (state.mode === "merging" || state.mode === "killing") return;
+      if (
+        state.mode === "merging" ||
+        state.mode === "killing" ||
+        state.mode === "closingAll"
+      ) {
+        return;
+      }
       if (state.mode === "resuming") return;
+      if (state.mode === "sending") return;
+      if (state.mode === "help") {
+        // Any of ?, esc, q (or Ctrl-C) closes. Other keys ignored so a
+        // mistyped action while reading doesn't trigger something
+        // destructive in the background.
+        if (
+          input === "?" ||
+          input === "q" ||
+          key.escape ||
+          (key.ctrl && input === "c")
+        ) {
+          dispatch({ type: "mode/list" });
+        }
+        return;
+      }
+      if (state.mode === "sendInput") {
+        // TextInput handles its own keystrokes; we just trap escape to bail.
+        if (key.escape) dispatch({ type: "mode/list" });
+        return;
+      }
+      if (state.mode === "filter") {
+        // TextInput handles search text. Escape leaves the active filter in
+        // place; clear it by deleting the query.
+        if (key.escape || (key.ctrl && input === "c")) {
+          dispatch({ type: "mode/list" });
+        }
+        return;
+      }
 
       if (state.mode === "resumeAgentPicker") {
         if (key.escape) dispatch({ type: "mode/list" });
@@ -420,6 +1011,17 @@ export function App() {
         }
         return;
       }
+      if (state.mode === "confirmCloseAll") {
+        if (input === "y" || input === "Y") {
+          void doCloseAllPanes();
+          return;
+        }
+        if (input === "n" || input === "N" || key.escape) {
+          dispatch({ type: "mode/list" });
+          return;
+        }
+        return;
+      }
 
       // gg chord — now scrolls inspector to top instead of jumping list selection.
       if (state.pendingChord === "g") {
@@ -435,7 +1037,28 @@ export function App() {
       }
 
       if (input === "q" || (key.ctrl && input === "c")) {
-        exit();
+        doQuit();
+        return;
+      }
+      if (input === "Q") {
+        if (!inSess) {
+          dispatch({
+            type: "flash",
+            message: "Not in zellij — no agent panes to close.",
+          });
+          return;
+        }
+        dispatch({ type: "mode/confirmCloseAll" });
+        return;
+      }
+      if (input === "/") {
+        dispatch({ type: "mode/filter" });
+        return;
+      }
+      if (input === "r") {
+        fetchedRef.current.clear();
+        dispatch({ type: "flash", message: "Refreshing task board…" });
+        refreshProjectRef.current();
         return;
       }
       // Lowercase j/k + arrows still drive the list selection.
@@ -523,10 +1146,19 @@ export function App() {
           return;
         }
         const task = state.tasks.find((t) => t.slug === slug);
+        if (task?.state === "merged") {
+          dispatch({ type: "flash", message: `${slug} is already applied.` });
+          return;
+        }
         // Live pane → focus. Otherwise → resume (start a new pane in the
         // existing worktree with the agent's resume flag).
-        if (task && (task.state === "running" || task.state === "waiting")) {
-          focusPaneByName(slug).then((ok) => {
+        if (task && isLivePane(task.state)) {
+          // Prefer focus-by-id; falls back to focus-by-name only when the
+          // poll loop hasn't established a paneId yet (legacy slugs).
+          const focusP = task.paneId
+            ? focusPaneId(task.paneId)
+            : focusPaneByName(slug);
+          focusP.then((ok) => {
             if (!ok) {
               // Pane state changed between poll and keystroke — fall through
               // to resume.
@@ -540,6 +1172,10 @@ export function App() {
       }
 
       // Inspector mode toggles.
+      if (input === "t") {
+        dispatch({ type: "inspector/setMode", mode: "task" });
+        return;
+      }
       if (input === "f") {
         dispatch({ type: "inspector/setMode", mode: "files" });
         return;
@@ -559,33 +1195,86 @@ export function App() {
 
       if (input === "m") {
         if (!state.selectedSlug) return;
+        const task = state.tasks.find((t) => t.slug === state.selectedSlug);
+        if (task?.state === "merged") {
+          dispatch({
+            type: "flash",
+            message: `${state.selectedSlug} is already applied.`,
+          });
+          return;
+        }
         dispatch({ type: "mode/confirmMerge" });
         return;
       }
       if (input === "X") {
         if (!state.selectedSlug) return;
+        const task = state.tasks.find((t) => t.slug === state.selectedSlug);
+        if (task?.state === "merged") {
+          dispatch({
+            type: "flash",
+            message: `${state.selectedSlug} is already applied.`,
+          });
+          return;
+        }
         dispatch({ type: "mode/confirmKill" });
         return;
       }
+      if (input === "i") {
+        const slug = state.selectedSlug;
+        if (!slug) return;
+        if (!inSess) {
+          dispatch({
+            type: "flash",
+            message: "Not in zellij — send disabled.",
+          });
+          return;
+        }
+        const t = state.tasks.find((x) => x.slug === slug);
+        if (!t || !isLivePane(t.state)) {
+          dispatch({
+            type: "flash",
+            message: `Cannot send: ${slug} has no live pane.`,
+          });
+          return;
+        }
+        dispatch({ type: "mode/sendInput" });
+        return;
+      }
 
-      // Stubs.
-      if (input === "/" || input === "?" || input === "r") {
-        dispatch({
-          type: "flash",
-          message: `'${input}' not yet implemented (see README → TODOs)`,
-        });
+      if (input === "?") {
+        dispatch({ type: "mode/help" });
+        return;
       }
     },
     { isActive: true }
   );
 
+  const visibleTasks = visibleTasksFor(state.tasks, state.filterQuery);
   const selectedTask =
     state.tasks.find((t) => t.slug === state.selectedSlug) ?? null;
+
+  /**
+   * Pick any live agent pane as the stack anchor. Excludes a slug we're
+   * about to operate on (resume) so we don't anchor onto a pane that's
+   * about to be replaced.
+   */
+  function pickStackAnchor(excludeSlug?: string): string | null {
+    for (const t of state.tasks) {
+      if (excludeSlug && t.slug === excludeSlug) continue;
+      if (!t.paneId) continue;
+      if (isLivePane(t.state)) return t.paneId;
+    }
+    return null;
+  }
 
   async function doSpawn(description: string, agent: AgentKind) {
     dispatch({ type: "mode/spawning" });
     try {
-      const res = await spawnAgent({ description, agent });
+      const res = await spawnAgent({
+        description,
+        agent,
+        anchorPaneId: pickStackAnchor(),
+      });
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
     } catch (err) {
@@ -603,8 +1292,125 @@ export function App() {
     dispatch({ type: "mode/merging" });
     try {
       await mergeToMain(task.path);
+      const mergedTask: Task = {
+        ...task,
+        state: "merged",
+        paneId: undefined,
+        dirty: false,
+        review: { files: 0, commitsAhead: 0, untracked: 0 },
+      };
+      completedTasksRef.current.set(slug, {
+        task: mergedTask,
+        untilMs: Date.now() + MERGED_FADE_MS,
+      });
+      reviewStatsRef.current.delete(slug);
+      dispatch({ type: "task/merged", slug, task: mergedTask });
       dispatch({ type: "mode/list" });
-      dispatch({ type: "flash", message: `Merged ${slug} → main` });
+      dispatch({ type: "flash", message: `Applied ${slug} → main` });
+    } catch (err) {
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  function doQuit() {
+    // Replit-style background model: leaving the dashboard does not kill
+    // agents. Use explicit `Q` when you intentionally want to close panes.
+    exit();
+  }
+
+  async function collectAgentPaneIds(): Promise<Set<string>> {
+    // Build the close set from EVERY signal we have, not just in-memory
+    // state — the poll loop's "is this pane live?" detection is fragile
+    // (title rewrites, stale paneIds) and we'd rather over-close than
+    // leak panes when the user explicitly asks to close all. The union of:
+    //   - in-memory task.paneId for live tasks
+    //   - state-file recorded paneIds (catches panes lazyagent spawned
+    //     even if the poll loop has lost track of them)
+    //   - zellij panes whose cwd matches any current worktree path
+    //     (catches panes whose recorded paneId is stale but the agent
+    //     is still running in the worktree)
+    const toClose = new Set<string>();
+    for (const t of state.tasks) {
+      if (t.paneId && isLivePane(t.state)) toClose.add(t.paneId);
+    }
+    try {
+      const records = await loadAll();
+      const snapshot = await panesSnapshot();
+      for (const slug of Object.keys(records)) {
+        const pid = records[slug]?.paneId;
+        if (pid && snapshot.byId.has(pid)) toClose.add(pid);
+      }
+      for (const t of state.tasks) {
+        const cwdHit = snapshot.byCwd.get(t.path);
+        if (cwdHit) toClose.add(cwdHit.paneId);
+      }
+    } catch {
+      /* best-effort augmentation; fall through with whatever we have */
+    }
+    return toClose;
+  }
+
+  async function doCloseAllPanes() {
+    if (closingAllRef.current) return;
+    closingAllRef.current = true;
+    dispatch({ type: "mode/closingAll" });
+    try {
+      const toClose = await collectAgentPaneIds();
+      if (toClose.size === 0) {
+        dispatch({ type: "mode/list" });
+        dispatch({ type: "flash", message: "No live agent panes found." });
+        return;
+      }
+      // Sequential — zellij re-arranges layout per close, and parallel calls
+      // produced inconsistent results in informal testing.
+      for (const id of toClose) {
+        try {
+          await closePaneById(id);
+        } catch {
+          /* swallow */
+        }
+      }
+      await focusOwnPane().catch(() => false);
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "flash",
+        message: `Closed ${toClose.size} live agent pane${toClose.size === 1 ? "" : "s"}.`,
+      });
+    } catch (err) {
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      closingAllRef.current = false;
+    }
+  }
+
+  async function doSendInput(slug: string, text: string) {
+    dispatch({ type: "mode/sending" });
+    try {
+      const task = state.tasks.find((t) => t.slug === slug);
+      const ok = task?.paneId
+        ? await sendKeysToPaneId(task.paneId, text)
+        : await sendKeysToSlug(slug, text);
+      dispatch({ type: "mode/list" });
+      if (ok) {
+        const preview = text.length > 30 ? text.slice(0, 30) + "…" : text;
+        dispatch({
+          type: "flash",
+          message: `→ ${slug}: ${preview || "(enter)"}`,
+        });
+      } else {
+        dispatch({
+          type: "error",
+          message: `Could not send to ${slug} — pane may have closed.`,
+        });
+      }
     } catch (err) {
       dispatch({ type: "mode/list" });
       dispatch({
@@ -617,7 +1423,15 @@ export function App() {
   async function doKill(slug: string) {
     dispatch({ type: "mode/killing" });
     try {
-      if (inSess) await closePaneByName(slug);
+      if (inSess) {
+        const task = state.tasks.find((t) => t.slug === slug);
+        if (task?.paneId) {
+          await closePaneById(task.paneId);
+        } else {
+          // Legacy slug or not yet observed — fall back to title lookup.
+          await closePaneByName(slug);
+        }
+      }
       await removeWorktree(slug);
       // Drop the state-file entry so a future task with the same slug
       // doesn't inherit the wrong agent kind.
@@ -647,7 +1461,11 @@ export function App() {
   async function doResume(slug: string, agent: AgentKind) {
     dispatch({ type: "mode/resuming" });
     try {
-      await resumeAgent({ slug, agent });
+      await resumeAgent({
+        slug,
+        agent,
+        anchorPaneId: pickStackAnchor(slug),
+      });
       dispatch({ type: "mode/list" });
       dispatch({
         type: "flash",
@@ -662,16 +1480,25 @@ export function App() {
     }
   }
 
-  const listHeight = Math.max(5, Math.floor(rows / 3));
+  const listHeight = Math.max(
+    4,
+    Math.min(Math.max(4, visibleTasks.length + 2), Math.floor(rows / 3))
+  );
   const showConfirm =
     state.mode === "confirmMerge" ||
     state.mode === "confirmKill" ||
+    state.mode === "confirmCloseAll" ||
     state.mode === "merging" ||
-    state.mode === "killing";
-  const confirmHeight = showConfirm ? 5 : 0;
-  const inspectorHeight = Math.max(8, rows - listHeight - confirmHeight - 3);
+      state.mode === "killing" ||
+      state.mode === "closingAll";
+  const showSendInput = state.mode === "sendInput" || state.mode === "sending";
+  const showFilter = state.mode === "filter";
+  // Bordered prompt + title + hint + input/confirm row. The explicit slot
+  // prevents Ink from letting prompt rows overlap the inspector.
+  const bottomStripHeight = showConfirm || showSendInput || showFilter ? 7 : 0;
+  const inspectorHeight = Math.max(8, rows - listHeight - bottomStripHeight - 2);
   // Same formula as Inspector — the reducer needs it so it can clamp scrolls.
-  const inspectorMaxLines = Math.max(3, inspectorHeight - 4);
+  const inspectorMaxLines = Math.max(3, inspectorHeight - 6);
   const content = getContent(state, state.selectedSlug);
   const offsetForView = state.selectedSlug
     ? resolveOffset(
@@ -682,18 +1509,47 @@ export function App() {
       )
     : 0;
 
+  if (state.mode === "help") {
+    return (
+      <Box flexDirection="column" height={rows}>
+        <Box paddingX={1}>
+          <Text bold color={UI.accent}>
+            lazyagent
+          </Text>
+          <Text dimColor> — parallel agents in worktrees</Text>
+        </Box>
+        <Box flexGrow={1} flexDirection="column">
+          <HelpOverlay />
+        </Box>
+        <StatusBar
+          flash={state.flash}
+          error={state.error}
+          taskCount={state.tasks.length}
+          selectedTask={selectedTask}
+          inSession={inSess}
+          filterQuery={state.filterQuery}
+          visibleTaskCount={visibleTasks.length}
+          width={cols - 2}
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column" height={rows}>
-      <Box paddingX={1}>
-        <Text bold color="cyan">
-          lazyagent
-        </Text>
-        <Text dimColor> — parallel agents in worktrees</Text>
-      </Box>
+      <MainVersionBar
+        mainVersion={state.mainVersion}
+        tasks={state.tasks}
+        visibleTaskCount={visibleTasks.length}
+        filterQuery={state.filterQuery}
+        width={cols - 2}
+      />
       <Box flexDirection="column" height={listHeight}>
         <TaskList
-          tasks={state.tasks}
+          tasks={visibleTasks}
           selectedSlug={state.selectedSlug}
+          totalTasks={state.tasks.length}
+          filterQuery={state.filterQuery}
           width={cols - 2}
         />
       </Box>
@@ -729,6 +1585,10 @@ export function App() {
           <Box paddingX={1}>
             <Text color="yellow">resuming…</Text>
           </Box>
+        ) : state.mode === "closingAll" ? (
+          <Box paddingX={1}>
+            <Text color="yellow">closing live agent panes…</Text>
+          </Box>
         ) : (
           <Inspector
             task={selectedTask}
@@ -739,28 +1599,76 @@ export function App() {
             files={content.files}
             loading={state.inspectorLoading}
             height={inspectorHeight}
+            width={cols - 4}
             offset={offsetForView}
           />
         )}
       </Box>
-      {showConfirm ? (
-        <ConfirmPrompt
-          action={
-            state.mode === "confirmKill" || state.mode === "killing"
-              ? "kill"
-              : "merge"
-          }
-          slug={state.selectedSlug ?? ""}
-          busy={state.mode === "merging" || state.mode === "killing"}
-        />
+      {bottomStripHeight > 0 ? (
+        <Box height={bottomStripHeight} flexDirection="column">
+          {showConfirm ? (
+            <ConfirmPrompt
+              action={
+                state.mode === "confirmKill" || state.mode === "killing"
+                  ? "kill"
+                  : state.mode === "confirmCloseAll" ||
+                      state.mode === "closingAll"
+                    ? "closeAll"
+                    : "merge"
+              }
+              slug={
+                state.mode === "confirmCloseAll" || state.mode === "closingAll"
+                  ? "live agent panes"
+                  : state.selectedSlug ?? ""
+              }
+              busy={
+                state.mode === "merging" ||
+                state.mode === "killing" ||
+                state.mode === "closingAll"
+              }
+            />
+          ) : showSendInput ? (
+            <SendInputPrompt
+              slug={state.selectedSlug ?? ""}
+              value={state.sendInputValue}
+              busy={state.mode === "sending"}
+              onChange={(v) =>
+                dispatch({ type: "sendInput/setValue", value: v })
+              }
+              onSubmit={(v) => {
+                const slug = state.selectedSlug;
+                if (!slug) {
+                  dispatch({ type: "mode/list" });
+                  return;
+                }
+                const text = v;
+                if (!text.trim()) {
+                  dispatch({ type: "mode/list" });
+                  return;
+                }
+                void doSendInput(slug, text);
+              }}
+            />
+          ) : showFilter ? (
+            <FilterPrompt
+              value={state.filterQuery}
+              matched={visibleTasks.length}
+              total={state.tasks.length}
+              onChange={(v) => dispatch({ type: "filter/set", value: v })}
+              onSubmit={() => dispatch({ type: "mode/list" })}
+            />
+          ) : null}
+        </Box>
       ) : null}
       <StatusBar
         flash={state.flash}
         error={state.error}
         taskCount={state.tasks.length}
-        selected={state.selectedSlug}
-        selectedState={selectedTask?.state ?? null}
+        selectedTask={selectedTask}
         inSession={inSess}
+        filterQuery={state.filterQuery}
+        visibleTaskCount={visibleTasks.length}
+        width={cols - 2}
       />
     </Box>
   );

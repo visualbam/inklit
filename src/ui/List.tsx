@@ -1,74 +1,125 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { Task } from "../model.js";
-import { STATE_ICON, STATE_COLOR, STATE_LABEL, formatAge } from "./icons.js";
+import { lifecycleForTask } from "../model.js";
+import {
+  STATE_ICON,
+  STATE_COLOR,
+  LIFECYCLE_LABEL,
+  LIFECYCLE_COLOR,
+  formatStateLabel,
+  formatAge,
+} from "./icons.js";
+import { UI } from "./theme.js";
 
 interface Props {
   tasks: Task[];
   selectedSlug: string | null;
+  totalTasks: number;
+  filterQuery: string;
   width: number;
 }
 
-export function TaskList({ tasks, selectedSlug, width }: Props) {
+export function TaskList({
+  tasks,
+  selectedSlug,
+  totalTasks,
+  filterQuery,
+  width,
+}: Props) {
   if (tasks.length === 0) {
+    const query = filterQuery.trim();
     return (
-      <Box paddingX={1}>
-        <Text dimColor>
-          No worktrees yet — press{" "}
-          <Text color="cyan" bold>
-            n
-          </Text>{" "}
-          to launch an agent task.
-        </Text>
+      <Box paddingX={1} flexDirection="column">
+        {query ? (
+          <Text dimColor>
+            No tasks match "{query}" — edit with <Text color={UI.accent}>/</Text>{" "}
+            or clear the filter.
+          </Text>
+        ) : (
+          <Text dimColor>
+            No worktrees yet — press{" "}
+            <Text color={UI.accent} bold>
+              n
+            </Text>{" "}
+            to launch an agent task.
+          </Text>
+        )}
       </Box>
     );
   }
 
-  // Reserve roughly: 2 (icon) + 12 (state) + 8 (age) + 1 padding = 23.
-  const fixed = 23;
-  const slugCol = Math.max(12, Math.floor((width - fixed) * 0.45));
-  const subjectCol = Math.max(10, width - fixed - slugCol - 2);
+  // Reserve roughly: rail+icon + stage + pane + age + review + spacing.
+  const fixed = 48;
+  const slugCol = Math.max(10, Math.floor((width - fixed) * 0.34));
+  const subjectCol = Math.max(8, width - fixed - slugCol - 2);
+  const divider = "─".repeat(Math.max(0, width - 2));
 
   return (
     <Box flexDirection="column">
       <Box paddingX={1}>
         <Text dimColor>
-          {pad("", 2)} {pad("task", slugCol)} {pad("subject", subjectCol)}{" "}
-          {pad("state", 9)} {pad("age", 5)}
+          {pad("", 4)} {pad("task", slugCol)} {pad("subject", subjectCol)}{" "}
+          {pad("stage", 8)} {pad("pane", 9)} {pad("review", 11)}{" "}
+          {pad("age", 5)}
         </Text>
       </Box>
+      <Box paddingX={1}>
+        <Text dimColor>{divider}</Text>
+      </Box>
       {tasks.map((t) => {
-        const selected = t.slug === selectedSlug;
+        const sel = t.slug === selectedSlug;
         const icon = STATE_ICON[t.state];
         const color = STATE_COLOR[t.state];
-        const stateLabel = STATE_LABEL[t.state];
-        const dirtyMark = t.dirty ? "*" : " ";
-        // Inner <Text> color/dimColor wins over the wrapper, so when selected
-        // we have to explicitly drop them — otherwise dim grey or per-state
-        // colors render on top of blueBright and the row goes unreadable.
+        const stateLabel = formatStateLabel(t);
+        const lifecycle = lifecycleForTask(t);
+        const lifecycleLabel = LIFECYCLE_LABEL[lifecycle];
+        const lifecycleColor = LIFECYCLE_COLOR[lifecycle];
+        const review = formatReview(t);
         return (
           <Box key={t.slug} paddingX={1}>
-            <Text
-              backgroundColor={selected ? "blueBright" : undefined}
-              color={selected ? "white" : undefined}
-              bold={selected}
-            >
-              <Text color={selected ? "white" : color}>{icon}</Text>
-              <Text>{dirtyMark}</Text>
-              <Text>{pad(t.slug, slugCol)}</Text>{" "}
-              <Text dimColor={!selected}>
+            <Text>
+              <Text color={sel ? UI.accent : UI.subtle}>
+                {sel ? "▌" : " "}
+              </Text>
+              <Text> </Text>
+              <Text bold={sel} color={color}>
+                {icon}
+              </Text>
+              <Text> </Text>
+              <Text bold={sel}>
+                {pad(t.slug, slugCol)}{" "}
+              </Text>
+              <Text bold={sel} dimColor={!sel}>
                 {pad(t.error ?? t.subject, subjectCol)}
-              </Text>{" "}
-              <Text color={selected ? "white" : color}>
+              </Text>
+              <Text> </Text>
+              <Text bold={sel} color={lifecycleColor}>
+                {pad(lifecycleLabel, 8)}
+              </Text>
+              <Text> </Text>
+              <Text bold={sel} color={color}>
                 {pad(stateLabel, 9)}
-              </Text>{" "}
-              <Text dimColor={!selected}>
+              </Text>
+              <Text> </Text>
+              <Text bold={sel} dimColor={review.dim} color={review.color}>
+                {pad(review.text, 11)}
+              </Text>
+              <Text> </Text>
+              <Text bold={sel} dimColor={!sel}>
                 {pad(formatAge(t.ageSeconds), 5)}
               </Text>
             </Text>
           </Box>
         );
       })}
+      {filterQuery.trim() && tasks.length < totalTasks ? (
+        <Box paddingX={1}>
+          <Text dimColor>
+            showing {tasks.length}/{totalTasks} · clear filter with /
+          </Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }
@@ -76,4 +127,20 @@ export function TaskList({ tasks, selectedSlug, width }: Props) {
 function pad(s: string, n: number): string {
   if (s.length >= n) return s.slice(0, n);
   return s + " ".repeat(n - s.length);
+}
+
+function formatReview(task: Task): { text: string; color?: string; dim?: boolean } {
+  if (task.state === "merged") return { text: "applied", dim: true };
+  const stats = task.review;
+  if (!stats) return { text: "checking…", dim: true };
+  if (stats.files === 0 && stats.commitsAhead === 0 && stats.untracked === 0) {
+    return { text: "clean", dim: true };
+  }
+  const parts = [`${stats.files}f`];
+  if (stats.commitsAhead > 0) parts.push(`${stats.commitsAhead}c`);
+  if (stats.untracked > 0) parts.push(`${stats.untracked}u`);
+  return {
+    text: parts.join(" "),
+    color: stats.untracked > 0 ? UI.warning : UI.accent,
+  };
 }

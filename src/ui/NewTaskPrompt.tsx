@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import TextInput from "ink-text-input";
+import { UI } from "./theme.js";
 
 interface Props {
   value: string;
@@ -13,18 +14,18 @@ export function DescriptionPrompt({ value, onChange, onSubmit }: Props) {
   return (
     <Box
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={UI.accent}
       paddingX={1}
       flexDirection="column"
     >
-      <Text bold color="cyan">
+      <Text bold color={UI.accent}>
         New agent task
       </Text>
       <Text dimColor>
         Describe what the agent should do. Enter to continue, esc to cancel.
       </Text>
       <Box marginTop={1}>
-        <Text color="cyan">{">  "}</Text>
+        <Text color={UI.accent}>{">  "}</Text>
         <TextInput value={value} onChange={onChange} onSubmit={onSubmit} />
       </Box>
     </Box>
@@ -44,23 +45,23 @@ export function AgentPicker({ label, intent = "spawn" }: AgentPickerProps) {
   return (
     <Box
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={UI.accent}
       paddingX={1}
       flexDirection="column"
     >
-      <Text bold color="cyan">
+      <Text bold color={UI.accent}>
         {heading} <Text color="white">{label}</Text>
       </Text>
       <Box marginTop={1} flexDirection="column">
         <Text>
-          <Text color="cyan" bold>
+          <Text color={UI.accent} bold>
             c
           </Text>
           {"  "}claude code{" "}
           {intent === "resume" ? <Text dimColor>(--continue)</Text> : null}
         </Text>
         <Text>
-          <Text color="cyan" bold>
+          <Text color={UI.accent} bold>
             x
           </Text>
           {"  "}codex{" "}

@@ -1,19 +1,27 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { UI } from "./theme.js";
 
 interface Props {
-  action: "merge" | "kill";
+  action: "merge" | "kill" | "closeAll";
   slug: string;
   busy?: boolean;
 }
 
 export function ConfirmPrompt({ action, slug, busy }: Props) {
-  const color = action === "kill" ? "red" : "yellow";
-  const verb = action === "kill" ? "kill" : "merge to main";
+  const color = action === "kill" ? UI.danger : UI.warning;
+  const verb =
+    action === "kill"
+      ? "kill"
+      : action === "closeAll"
+        ? "close all live panes"
+        : "apply to main";
   const detail =
     action === "kill"
       ? "Closes the zellij pane and runs `wt remove -f -D` (force, even if unmerged)."
-      : "Runs `wt merge main` inside the worktree (squash + remove on success).";
+      : action === "closeAll"
+        ? "Closes live zellij agent panes only. Worktrees and task records survive; enter resumes later."
+      : "Runs `wt merge main` to apply this task into the main version (squash + remove on success).";
   return (
     <Box
       borderStyle="round"
@@ -22,7 +30,11 @@ export function ConfirmPrompt({ action, slug, busy }: Props) {
       flexDirection="column"
     >
       <Text bold color={color}>
-        {busy ? `${verb}…` : `Confirm: ${verb} "${slug}"?`}
+        {busy
+          ? `${verb}…`
+          : action === "closeAll"
+            ? `Confirm: close ${slug}?`
+            : `Confirm: ${verb} "${slug}"?`}
       </Text>
       <Text dimColor>{detail}</Text>
       {!busy ? (

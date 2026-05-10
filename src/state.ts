@@ -7,6 +7,14 @@ export interface TaskRecord {
   agent: AgentKind;
   spawnedAt: number;
   lastResumedAt?: number;
+  /**
+   * The zellij pane id (e.g. `terminal_47`) we spawned this slug into.
+   * Used by the poll loop to identify the pane by id instead of title —
+   * agent CLIs (especially claude-code) emit OSC set-title shortly after
+   * boot, which would otherwise make title-based lookup fail and the task
+   * incorrectly drift to `ready`.
+   */
+  paneId?: string;
 }
 
 interface StateFile {
@@ -50,12 +58,14 @@ async function writeFile(state: StateFile): Promise<void> {
 /** Record that we spawned `slug` with `agent`. Idempotent. */
 export async function recordSpawn(
   slug: string,
-  agent: AgentKind
+  agent: AgentKind,
+  paneId?: string | null
 ): Promise<void> {
   const state = await readFile();
   state.tasks[slug] = {
     agent,
     spawnedAt: state.tasks[slug]?.spawnedAt ?? Date.now(),
+    paneId: paneId ?? state.tasks[slug]?.paneId,
   };
   await writeFile(state);
 }
@@ -63,7 +73,8 @@ export async function recordSpawn(
 /** Touch the task's lastResumedAt. Creates the entry if missing. */
 export async function recordResume(
   slug: string,
-  agent: AgentKind
+  agent: AgentKind,
+  paneId?: string | null
 ): Promise<void> {
   const state = await readFile();
   const existing = state.tasks[slug];
@@ -71,7 +82,38 @@ export async function recordResume(
     agent,
     spawnedAt: existing?.spawnedAt ?? Date.now(),
     lastResumedAt: Date.now(),
+    paneId: paneId ?? existing?.paneId,
   };
+  await writeFile(state);
+}
+
+/**
+ * Adopt a paneId for a slug discovered via title-based lookup. Used as a
+ * one-shot upgrade for legacy tasks (spawned before paneId tracking) when
+ * the poll loop happens to catch the pane before its title is rewritten.
+ * No-op if the slug isn't already tracked or already has the same paneId.
+ */
+export async function recordPane(
+  slug: string,
+  paneId: string
+): Promise<void> {
+  const state = await readFile();
+  const existing = state.tasks[slug];
+  if (!existing) return;
+  if (existing.paneId === paneId) return;
+  state.tasks[slug] = { ...existing, paneId };
+  await writeFile(state);
+}
+
+/**
+ * Drop a stale paneId (the pane is gone — agent exited or was closed).
+ * Keeps the task record so resume still knows the agent kind.
+ */
+export async function clearPane(slug: string): Promise<void> {
+  const state = await readFile();
+  const existing = state.tasks[slug];
+  if (!existing || !existing.paneId) return;
+  state.tasks[slug] = { ...existing, paneId: undefined };
   await writeFile(state);
 }
 

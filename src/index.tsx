@@ -20,7 +20,7 @@ if (args.includes("-h") || args.includes("--help")) {
       "Run inside a zellij session for full functionality (focus + spawn).",
       "Outside zellij, the list still renders read-only.",
       "",
-      "Keys: j/k move, gg/G top/bottom, n new task, enter focus pane, q quit.",
+      "Keys: j/k move, gg/G top/bottom, n new task, m apply, q quit.",
     ].join("\n")
   );
   process.exit(0);

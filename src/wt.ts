@@ -1,5 +1,5 @@
 import { execa, ExecaError } from "execa";
-import type { Task, TaskState } from "./model.js";
+import type { MainVersion, ReviewStats, Task, TaskState } from "./model.js";
 
 /**
  * Shape of one entry from `wt list --format json` (worktrunk 0.48).
@@ -31,6 +31,11 @@ interface WtListEntry {
   symbols?: string;
 }
 
+export interface ProjectSnapshot {
+  mainVersion: MainVersion;
+  tasks: Task[];
+}
+
 export class WtError extends Error {
   constructor(message: string, public stderr?: string) {
     super(message);
@@ -44,6 +49,19 @@ export class WtError extends Error {
  */
 export async function listTasks(opts: { cwd?: string } = {}): Promise<Task[]> {
   const raw = await listRaw(opts.cwd);
+  return tasksFromRaw(raw);
+}
+
+export async function listProject(
+  opts: { cwd?: string } = {}
+): Promise<ProjectSnapshot> {
+  const raw = await listRaw(opts.cwd);
+  const tasks = tasksFromRaw(raw);
+  const mainVersion = await mainVersionFromRaw(raw, opts.cwd);
+  return { mainVersion, tasks };
+}
+
+function tasksFromRaw(raw: WtListEntry[]): Task[] {
   const now = Math.floor(Date.now() / 1000);
   const tasks: Task[] = [];
 
@@ -51,14 +69,7 @@ export async function listTasks(opts: { cwd?: string } = {}): Promise<Task[]> {
     if (entry.is_main) continue;
     if (!entry.branch || !entry.path) continue;
 
-    const wt = entry.working_tree;
-    const dirty = !!(
-      wt?.staged ||
-      wt?.modified ||
-      wt?.untracked ||
-      wt?.renamed ||
-      wt?.deleted
-    );
+    const dirty = workingTreeDirty(entry.working_tree);
 
     const ts = entry.commit?.timestamp ?? now;
     const age = Math.max(0, now - ts);
@@ -76,6 +87,121 @@ export async function listTasks(opts: { cwd?: string } = {}): Promise<Task[]> {
   }
 
   return tasks;
+}
+
+/**
+ * Replit calls the trunk target the "main version"; locally this is the
+ * checkout/worktree that receives applied task work. Prefer worktrunk's
+ * explicit `is_main` entry, then fall back to plain git so the header still
+ * works while setup is incomplete.
+ */
+export async function getMainVersion(
+  opts: { cwd?: string } = {}
+): Promise<MainVersion> {
+  const cwd = opts.cwd;
+  try {
+    const raw = await listRaw(cwd);
+    return mainVersionFromRaw(raw, cwd);
+  } catch {
+    /* Plain git fallback below. */
+  }
+
+  return gitMainVersionFromCwd(cwd);
+}
+
+async function mainVersionFromRaw(
+  raw: WtListEntry[],
+  cwd?: string
+): Promise<MainVersion> {
+  const mainEntry = raw.find((entry) => entry.is_main);
+  if (mainEntry?.path) {
+    return {
+      path: mainEntry.path,
+      branch: mainEntry.branch ?? (await gitBranch(mainEntry.path)),
+      shortSha:
+        mainEntry.commit?.short_sha ?? (await gitShortSha(mainEntry.path)),
+      subject:
+        mainEntry.commit?.message?.split("\n")[0] ??
+        (await gitSubject(mainEntry.path)),
+      dirty: mainEntry.working_tree
+        ? workingTreeDirty(mainEntry.working_tree)
+        : await gitDirty(mainEntry.path),
+      current: !!mainEntry.is_current,
+    };
+  }
+  return gitMainVersionFromCwd(cwd);
+}
+
+function workingTreeDirty(wt: WtListEntry["working_tree"]): boolean {
+  return !!(
+    wt?.staged ||
+    wt?.modified ||
+    wt?.untracked ||
+    wt?.renamed ||
+    wt?.deleted
+  );
+}
+
+async function gitMainVersionFromCwd(cwd?: string): Promise<MainVersion> {
+  const fallbackPath = cwd ?? process.cwd();
+  try {
+    const path = await gitTopLevel(cwd);
+    const [branch, shortSha, subject, dirty] = await Promise.all([
+      gitBranch(path),
+      gitShortSha(path),
+      gitSubject(path),
+      gitDirty(path),
+    ]);
+    return {
+      path,
+      branch,
+      shortSha,
+      subject,
+      dirty,
+      current: true,
+    };
+  } catch (err) {
+    return {
+      path: fallbackPath,
+      branch: "unknown",
+      shortSha: "",
+      subject: "",
+      dirty: false,
+      current: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function gitTopLevel(cwd?: string): Promise<string> {
+  return gitOne(cwd, ["rev-parse", "--show-toplevel"]);
+}
+
+async function gitBranch(cwd: string): Promise<string> {
+  const branch = await gitOne(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  return branch === "HEAD" ? "detached" : branch;
+}
+
+async function gitShortSha(cwd: string): Promise<string> {
+  return gitOne(cwd, ["rev-parse", "--short", "HEAD"]);
+}
+
+async function gitSubject(cwd: string): Promise<string> {
+  return gitOne(cwd, ["log", "-1", "--pretty=%s"]);
+}
+
+async function gitDirty(cwd: string): Promise<boolean> {
+  const status = await gitOne(cwd, ["status", "--porcelain"]);
+  return status.length > 0;
+}
+
+async function gitOne(cwd: string | undefined, args: string[]): Promise<string> {
+  const gitArgs = cwd ? ["-C", cwd, ...args] : args;
+  const { stdout } = await execa("git", gitArgs, {
+    reject: true,
+    stripFinalNewline: true,
+  });
+  return stdout;
 }
 
 async function listRaw(cwd?: string): Promise<WtListEntry[]> {
@@ -151,36 +277,42 @@ export interface StatusEntry {
 const NUMSTAT_LINE = /^(\d+|-)\s+(\d+|-)\s+(.+)$/;
 
 /**
- * Parse `git status --short` plus `git diff --numstat HEAD` into a single
- * structured list. Falls back gracefully when either command errors.
+ * Parse the final task patch relative to the main version into file rows.
+ * This includes committed, staged, unstaged, renamed, deleted, and untracked
+ * files so review mode matches what `m` is about to apply.
  */
-export async function gitFiles(path: string): Promise<StatusEntry[]> {
-  let statusOut = "";
+export async function gitFiles(
+  path: string,
+  target = "main"
+): Promise<StatusEntry[]> {
+  let nameStatusOut = "";
   let numstatOut = "";
+  let base = target;
   try {
+    base = await gitDiffBase(path, target);
     const { stdout } = await execa(
       "git",
       [
         "-C",
         path,
-        "status",
-        "--short",
-        "--no-renames",
-        "--untracked-files=all",
+        "diff",
+        "--name-status",
+        "--find-renames",
+        base,
       ],
       { reject: true, stripFinalNewline: true }
     );
-    statusOut = stdout;
+    nameStatusOut = stdout;
   } catch {
     return [];
   }
   try {
-    const { stdout } = await execa(
+    const { stdout: numstat } = await execa(
       "git",
-      ["-C", path, "diff", "--numstat", "HEAD"],
+      ["-C", path, "diff", "--numstat", "--find-renames", base],
       { reject: true, stripFinalNewline: true }
     );
-    numstatOut = stdout;
+    numstatOut = numstat;
   } catch {
     /* numstat is best-effort */
   }
@@ -190,28 +322,81 @@ export async function gitFiles(path: string): Promise<StatusEntry[]> {
     const m = line.match(NUMSTAT_LINE);
     if (!m) continue;
     const [, a = "0", d = "0", p = ""] = m;
-    counts.set(p, {
+    const count = {
       added: a === "-" ? 0 : Number(a),
       deleted: d === "-" ? 0 : Number(d),
-    });
+    };
+    for (const key of countKeys(p)) counts.set(key, count);
   }
 
   const entries: StatusEntry[] = [];
-  for (const line of statusOut.split("\n")) {
+  const seen = new Set<string>();
+  for (const line of nameStatusOut.split("\n")) {
     if (!line) continue;
-    const code = line.slice(0, 2);
-    const p = line.slice(3);
-    const c = counts.get(p) ?? { added: 0, deleted: 0 };
-    entries.push({ code, path: p, added: c.added, deleted: c.deleted });
+    const parts = line.split("\t");
+    const code = parts[0] ?? "";
+    const status = code[0] ?? code;
+    const oldPath = parts[1] ?? "";
+    const newPath = parts[2] ?? "";
+    const pathLabel =
+      (status === "R" || status === "C") && newPath
+        ? `${oldPath} -> ${newPath}`
+        : oldPath;
+    const countPath = newPath || oldPath;
+    if (!pathLabel) continue;
+    const c =
+      counts.get(countPath) ??
+      counts.get(pathLabel) ?? { added: 0, deleted: 0 };
+    entries.push({ code, path: pathLabel, added: c.added, deleted: c.deleted });
+    seen.add(pathLabel);
+    if (countPath) seen.add(countPath);
   }
+
+  const untracked = await gitUntrackedFiles(path);
+  for (const file of untracked) {
+    if (seen.has(file)) continue;
+    const c = await gitUntrackedNumstat(path, file);
+    entries.push({ code: "??", path: file, added: c.added, deleted: c.deleted });
+  }
+
   return entries;
 }
 
 /**
- * Unified diff for everything this worktree has done relative to `target`:
- * committed changes (`target...HEAD`), uncommitted modifications (`diff HEAD`),
- * AND every untracked file's contents synthesized via `diff --no-index`. Capped
- * to ~maxBytes total.
+ * Cheap board-level review summary. This intentionally avoids reading file
+ * contents or numstat so it can run in the background without freezing input.
+ */
+export async function gitReviewStats(
+  worktreePath: string,
+  target = "main"
+): Promise<ReviewStats> {
+  try {
+    const base = await gitDiffBase(worktreePath, target);
+    const [tracked, untracked, commits] = await Promise.all([
+      gitLines(
+        worktreePath,
+        ["diff", "--name-only", "--find-renames", base],
+        1000
+      ),
+      gitUntrackedFiles(worktreePath),
+      gitOneTimed(worktreePath, ["rev-list", "--count", `${base}..HEAD`], 1000),
+    ]);
+    const files = new Set([...tracked, ...untracked]);
+    return {
+      files: files.size,
+      commitsAhead: Number(commits) || 0,
+      untracked: untracked.length,
+    };
+  } catch {
+    return { files: 0, commitsAhead: 0, untracked: 0 };
+  }
+}
+
+/**
+ * Unified final patch for everything this worktree has done relative to
+ * `target`: committed + staged + unstaged tracked changes as one diff, plus
+ * every untracked file's contents synthesized via `diff --no-index`. Capped to
+ * ~maxBytes total.
  *
  * Untracked content matters: a brand-new file in a brand-new folder is invisible
  * to plain `git diff`, so without this the "diff" pane lies about what's there.
@@ -223,29 +408,15 @@ export async function gitDiff(
 ): Promise<string> {
   try {
     const parts: string[] = [];
-
-    const { stdout: committed } = await execa(
+    const base = await gitDiffBase(worktreePath, target);
+    const { stdout: tracked } = await execa(
       "git",
-      ["-C", worktreePath, "diff", `${target}...HEAD`],
+      ["-C", worktreePath, "diff", "--find-renames", base],
       { reject: false, stripFinalNewline: true, maxBuffer: maxBytes * 4 }
     );
-    if (committed) parts.push(committed);
+    if (tracked) parts.push(tracked);
 
-    const { stdout: uncommitted } = await execa(
-      "git",
-      ["-C", worktreePath, "diff", "HEAD"],
-      { reject: false, stripFinalNewline: true, maxBuffer: maxBytes * 4 }
-    );
-    if (uncommitted) parts.push(uncommitted);
-
-    const { stdout: untrackedList } = await execa(
-      "git",
-      ["-C", worktreePath, "ls-files", "--others", "--exclude-standard"],
-      { reject: false, stripFinalNewline: true }
-    );
-    const untracked = untrackedList
-      ? untrackedList.split("\n").filter(Boolean)
-      : [];
+    const untracked = await gitUntrackedFiles(worktreePath);
     for (const file of untracked) {
       // --no-index always exits 1 when files differ; reject:false swallows that.
       const { stdout } = await execa(
@@ -265,7 +436,7 @@ export async function gitDiff(
     }
 
     const combined = parts.join("\n");
-    if (!combined) return "(no changes vs main)";
+    if (!combined) return "(no changes vs main version)";
     if (combined.length > maxBytes) {
       return (
         combined.slice(0, maxBytes) +
@@ -277,6 +448,85 @@ export async function gitDiff(
     const e = err as ExecaError;
     return `git diff failed: ${e.shortMessage ?? e.message}`;
   }
+}
+
+async function gitDiffBase(
+  worktreePath: string,
+  target: string
+): Promise<string> {
+  const { stdout } = await execa(
+    "git",
+    ["-C", worktreePath, "merge-base", target, "HEAD"],
+    { reject: false, stripFinalNewline: true }
+  );
+  return stdout.trim() || target;
+}
+
+async function gitUntrackedFiles(worktreePath: string): Promise<string[]> {
+  const { stdout } = await execa(
+    "git",
+    ["-C", worktreePath, "ls-files", "--others", "--exclude-standard"],
+    { reject: false, stripFinalNewline: true }
+  );
+  return stdout ? stdout.split("\n").filter(Boolean) : [];
+}
+
+async function gitLines(
+  cwd: string,
+  args: string[],
+  timeout: number
+): Promise<string[]> {
+  const out = await gitOneTimed(cwd, args, timeout);
+  return out ? out.split("\n").filter(Boolean) : [];
+}
+
+async function gitOneTimed(
+  cwd: string,
+  args: string[],
+  timeout: number
+): Promise<string> {
+  const { stdout } = await execa("git", ["-C", cwd, ...args], {
+    reject: false,
+    stripFinalNewline: true,
+    timeout,
+  });
+  return stdout;
+}
+
+async function gitUntrackedNumstat(
+  worktreePath: string,
+  file: string
+): Promise<{ added: number; deleted: number }> {
+  const { stdout } = await execa(
+    "git",
+    [
+      "-C",
+      worktreePath,
+      "diff",
+      "--no-index",
+      "--numstat",
+      "--",
+      "/dev/null",
+      file,
+    ],
+    { reject: false, stripFinalNewline: true }
+  );
+  const line = stdout.split("\n").find(Boolean) ?? "";
+  const m = line.match(NUMSTAT_LINE);
+  if (!m) return { added: 0, deleted: 0 };
+  const [, a = "0", d = "0"] = m;
+  return {
+    added: a === "-" ? 0 : Number(a),
+    deleted: d === "-" ? 0 : Number(d),
+  };
+}
+
+function countKeys(path: string): string[] {
+  const keys = [path];
+  if (path.includes("=>")) {
+    keys.push(path.replace(/\{([^{}]*?) => ([^{}]*?)\}/g, "$2"));
+  }
+  return keys;
 }
 
 /** Commit log for the branch ahead of `target`. */
@@ -297,7 +547,7 @@ export async function gitLog(
       ],
       { reject: true, stripFinalNewline: true }
     );
-    return stdout || "(no commits ahead of main)";
+    return stdout || "(no commits ahead of main version)";
   } catch (err) {
     const e = err as ExecaError;
     return `git log failed: ${e.shortMessage ?? e.message}`;
