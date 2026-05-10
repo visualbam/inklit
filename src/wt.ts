@@ -367,7 +367,7 @@ export async function mergeToMain(
 
 /**
  * Remove a worktree by branch name. Forces both worktree removal (uncommitted
- * changes) and unmerged-branch deletion — `K` is "I want this gone."
+ * changes) and unmerged-branch deletion — `X` is "I want this gone."
  */
 export async function removeWorktree(slug: string): Promise<void> {
   try {

@@ -51,6 +51,13 @@ export interface AppState {
   pendingDescription: string;
   /** Slug awaiting agent selection during a resume flow. */
   pendingResumeSlug: string | null;
+  /**
+   * Inspector scroll offset, keyed by `${slug}:${mode}`. Value is the number of
+   * lines hidden above the viewport. Sentinel `-1` means "auto-tail to the
+   * bottom" — used by agent mode so live transcripts keep advancing as new
+   * lines come in. Missing key falls back to the per-mode default in App.
+   */
+  inspectorOffsets: Map<string, number>;
 }
 
 export const initialState: AppState = {
@@ -64,4 +71,5 @@ export const initialState: AppState = {
   pendingChord: null,
   pendingDescription: "",
   pendingResumeSlug: null,
+  inspectorOffsets: new Map(),
 };

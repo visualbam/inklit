@@ -4,9 +4,10 @@ import { Box, Text } from "ink";
 interface Props {
   diff: string;
   maxLines: number;
+  offset: number;
 }
 
-export function DiffView({ diff, maxLines }: Props) {
+export function DiffView({ diff, maxLines, offset }: Props) {
   if (!diff) {
     return (
       <Box paddingX={1}>
@@ -15,21 +16,24 @@ export function DiffView({ diff, maxLines }: Props) {
     );
   }
   const lines = diff.split("\n");
-  const visible = lines.slice(0, maxLines);
-  const overflow = lines.length - visible.length;
+  const maxOffset = Math.max(0, lines.length - maxLines);
+  const start = Math.min(Math.max(0, offset), maxOffset);
+  const visible = lines.slice(start, start + maxLines);
+  const above = start;
+  const below = Math.max(0, lines.length - start - visible.length);
 
   return (
     <Box flexDirection="column">
+      {above > 0 ? (
+        <Text dimColor>↑ {above} hidden above</Text>
+      ) : null}
       {visible.map((line, i) => (
         <Text key={i} {...colorFor(line)}>
           {line || " "}
         </Text>
       ))}
-      {overflow > 0 ? (
-        <Text dimColor>
-          …{overflow} more line{overflow === 1 ? "" : "s"} (resize terminal to
-          see more)
-        </Text>
+      {below > 0 ? (
+        <Text dimColor>↓ {below} hidden below</Text>
       ) : null}
     </Box>
   );

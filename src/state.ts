@@ -75,7 +75,7 @@ export async function recordResume(
   await writeFile(state);
 }
 
-/** Drop a task entry (e.g. after `K` succeeds). Best-effort. */
+/** Drop a task entry (e.g. after `X` kill succeeds). Best-effort. */
 export async function recordRemove(slug: string): Promise<void> {
   const state = await readFile();
   if (!(slug in state.tasks)) return;

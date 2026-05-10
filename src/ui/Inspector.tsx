@@ -15,6 +15,8 @@ interface Props {
   files: StatusEntry[];
   loading: boolean;
   height: number;
+  /** Lines hidden above the viewport (already clamped by App). */
+  offset: number;
 }
 
 export function Inspector({
@@ -26,6 +28,7 @@ export function Inspector({
   files,
   loading,
   height,
+  offset,
 }: Props) {
   // Reserve 2 lines for header + 1 for spacing inside the box.
   const maxLines = Math.max(3, height - 4);
@@ -55,15 +58,16 @@ export function Inspector({
         ) : loading ? (
           <Text dimColor>loading…</Text>
         ) : mode === "diff" ? (
-          <DiffView diff={diff} maxLines={maxLines} />
+          <DiffView diff={diff} maxLines={maxLines} offset={offset} />
         ) : mode === "files" ? (
-          <FilesView entries={files} maxLines={maxLines} />
+          <FilesView entries={files} maxLines={maxLines} offset={offset} />
         ) : mode === "log" ? (
-          <PlainText text={log} maxLines={maxLines} />
+          <PlainText text={log} maxLines={maxLines} offset={offset} />
         ) : (
           <PlainText
             text={agent}
             maxLines={maxLines}
+            offset={offset}
             placeholder="(agent transcript empty — pane may not be live)"
           />
         )}
@@ -71,7 +75,8 @@ export function Inspector({
       <Box>
         <Text dimColor>
           [<Text bold>f</Text>]iles · [<Text bold>d</Text>]iff · [
-          <Text bold>l</Text>]og · [<Text bold>a</Text>]gent
+          <Text bold>l</Text>]og · [<Text bold>a</Text>]gent · scroll{" "}
+          <Text bold>J/K</Text> ^d/^u <Text bold>gg/G</Text>
         </Text>
       </Box>
     </Box>
@@ -81,22 +86,30 @@ export function Inspector({
 function PlainText({
   text,
   maxLines,
+  offset,
   placeholder,
 }: {
   text: string;
   maxLines: number;
+  offset: number;
   placeholder?: string;
 }) {
   if (!text) {
     return <Text dimColor>{placeholder ?? "(empty)"}</Text>;
   }
   const lines = text.split("\n");
-  const visible = lines.slice(-maxLines); // tail by default
+  const maxOffset = Math.max(0, lines.length - maxLines);
+  const start = Math.min(Math.max(0, offset), maxOffset);
+  const visible = lines.slice(start, start + maxLines);
+  const above = start;
+  const below = Math.max(0, lines.length - start - visible.length);
   return (
     <Box flexDirection="column">
+      {above > 0 ? <Text dimColor>↑ {above} hidden above</Text> : null}
       {visible.map((l, i) => (
         <Text key={i}>{l || " "}</Text>
       ))}
+      {below > 0 ? <Text dimColor>↓ {below} hidden below</Text> : null}
     </Box>
   );
 }

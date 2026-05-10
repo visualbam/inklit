@@ -37,7 +37,7 @@ export function StatusBar({
           {inSession ? "" : " · not in zellij (spawn disabled)"}
           {"  "}
           <Text>
-            j/k move · n new · enter {enterVerb} · m merge · K kill · q quit
+            j/k move · J/K scroll · n new · enter {enterVerb} · m merge · X kill · q quit
           </Text>
         </Text>
       )}

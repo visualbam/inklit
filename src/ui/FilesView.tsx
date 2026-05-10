@@ -5,9 +5,10 @@ import type { StatusEntry } from "../wt.js";
 interface Props {
   entries: StatusEntry[];
   maxLines: number;
+  offset: number;
 }
 
-export function FilesView({ entries, maxLines }: Props) {
+export function FilesView({ entries, maxLines, offset }: Props) {
   if (entries.length === 0) {
     return (
       <Box paddingX={1}>
@@ -15,11 +16,17 @@ export function FilesView({ entries, maxLines }: Props) {
       </Box>
     );
   }
-  const visible = entries.slice(0, maxLines);
-  const overflow = entries.length - visible.length;
+  const maxOffset = Math.max(0, entries.length - maxLines);
+  const start = Math.min(Math.max(0, offset), maxOffset);
+  const visible = entries.slice(start, start + maxLines);
+  const above = start;
+  const below = Math.max(0, entries.length - start - visible.length);
 
   return (
     <Box flexDirection="column">
+      {above > 0 ? (
+        <Text dimColor>↑ {above} hidden above</Text>
+      ) : null}
       {visible.map((e) => {
         const { fg, label } = describe(e.code);
         const stat =
@@ -39,8 +46,8 @@ export function FilesView({ entries, maxLines }: Props) {
           </Box>
         );
       })}
-      {overflow > 0 ? (
-        <Text dimColor>…{overflow} more file{overflow === 1 ? "" : "s"}</Text>
+      {below > 0 ? (
+        <Text dimColor>↓ {below} hidden below</Text>
       ) : null}
     </Box>
   );

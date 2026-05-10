@@ -58,15 +58,19 @@ Movement is Vim/Helix-flavored.
 | -------- | ---------------------------------------------------------- |
 | `j` / ↓  | next task                                                  |
 | `k` / ↑  | previous task                                              |
-| `gg`     | jump to first task                                         |
-| `G`      | jump to last task                                          |
-| `Ctrl-D` | half-page down                                             |
-| `Ctrl-U` | half-page up                                               |
+| `[`      | jump to first task                                         |
+| `]`      | jump to last task                                          |
+| `J`      | scroll inspector down 1 line                               |
+| `K`      | scroll inspector up 1 line                                 |
+| `Ctrl-D` | scroll inspector down half-page                            |
+| `Ctrl-U` | scroll inspector up half-page                              |
+| `gg`     | jump inspector to top                                      |
+| `G`      | jump inspector to bottom (re-anchors agent transcript to live tail) |
 | `n`      | new task — prompts for description, then agent (`c`/`x`)  |
 | `enter`  | running/waiting → focus pane; ready → resume agent         |
 | `q` / `Ctrl-C` | quit                                                 |
 | `m`      | review-then-merge — switches inspector to diff and asks y/n |
-| `K`      | kill selected task — close pane + remove worktree (with y/n confirm) |
+| `X`      | kill selected task — close pane + remove worktree (with y/n confirm) |
 | `f`      | inspector → files (uncommitted, with `+/-` line counts)    |
 | `d`      | inspector → diff vs main                                   |
 | `l`      | inspector → log of commits ahead of main                   |
@@ -141,18 +145,21 @@ The agent kind is recorded at spawn time in
 `$XDG_STATE_HOME/lazyagent/tasks.json` (default `~/.local/state/...`). Tasks
 created before lazyagent existed — or via `wt switch` directly — won't have
 an entry, so resume opens the agent picker and remembers your choice for
-next time. `K` (kill) drops the entry so a future task with the same slug
+next time. `X` (kill) drops the entry so a future task with the same slug
 starts clean.
 
 ### Inspector modes
 
 The bottom half of the screen is the inspector. Toggle with `f`/`d`/`l`/`a`:
 
-- **`f` files** — `git status --short` parsed into a list, each entry colored
-  by status (untracked / modified / added / deleted) with `+N -M` line counts
-  from `git diff --numstat HEAD`.
-- **`d` diff** — unified diff of `<branch>...main` (or, if the branch has no
-  commits ahead, the uncommitted `git diff HEAD`). Capped at ~200KB.
+- **`f` files** — `git status --short --untracked-files=all` parsed into a
+  list, each entry colored by status (untracked / modified / added / deleted)
+  with `+N -M` line counts from `git diff --numstat HEAD`. Untracked folders
+  expand to individual files so brand-new content is never invisible.
+- **`d` diff** — unified diff combining `<branch>...main` (committed work) +
+  `git diff HEAD` (uncommitted modifications) + per-untracked-file
+  `git diff --no-index /dev/null <file>` so brand-new files render in unified
+  format. Capped at ~200KB.
 - **`l` log** — `git log --oneline --decorate main..HEAD`.
 - **`a` agent** — last 200 lines of the agent's zellij pane via
   `zellij action dump-screen -p <pane_id>`. Updates every 1.5s.
@@ -164,10 +171,10 @@ bottom. You see exactly what you're about to merge before pressing `y`.
 ### Destructive actions
 
 `m` runs `wt -C <worktree> merge main -y` (squash + auto-remove on success).
-`K` focuses the pane → `zellij action close-pane` → `wt remove <slug> -y -f -D`
+`X` focuses the pane → `zellij action close-pane` → `wt remove <slug> -y -f -D`
 (force the worktree gone even with uncommitted changes; force-delete the
 branch even if unmerged). Both prompt for `y`/`n` first; `esc` cancels. `m`
-forces the inspector to diff view first; `K` does the same so you can see
+forces the inspector to diff view first; `X` does the same so you can see
 what you'd be throwing away.
 
 ## Limitations & TODOs (phase 2)

@@ -36,6 +36,8 @@ interface ModeContent {
 
 const EMPTY_CONTENT: ModeContent = { diff: "", log: "", agent: "", files: [] };
 
+type ScrollKind = "lineUp" | "lineDown" | "halfUp" | "halfDown" | "top" | "bottom";
+
 type Action =
   | { type: "tasks/loaded"; tasks: Task[]; agents: Map<string, string> }
   | { type: "tasks/error"; message: string }
@@ -56,6 +58,7 @@ type Action =
   | { type: "inspector/setMode"; mode: InspectorMode }
   | { type: "inspector/data"; slug: string; key: keyof ModeContent; value: any }
   | { type: "inspector/loading"; loading: boolean }
+  | { type: "inspector/scroll"; kind: ScrollKind; maxLines: number }
   | { type: "newTask/setDescription"; value: string }
   | { type: "flash"; message: string | null }
   | { type: "error"; message: string | null }
@@ -90,6 +93,43 @@ function setContent(
   const prev = next.get(slug) ?? EMPTY_CONTENT;
   next.set(slug, { ...prev, ...patch });
   return next;
+}
+
+function scrollKey(slug: string, mode: InspectorMode): string {
+  return `${slug}:${mode}`;
+}
+
+/** Total renderable units (lines or file rows) in the current inspector view. */
+function totalLinesFor(s: RenderState): number {
+  const slug = s.selectedSlug;
+  if (!slug) return 0;
+  const c = s.content.get(slug);
+  if (!c) return 0;
+  switch (s.inspectorMode) {
+    case "diff":
+      return c.diff ? c.diff.split("\n").length : 0;
+    case "log":
+      return c.log ? c.log.split("\n").length : 0;
+    case "agent":
+      return c.agent ? c.agent.split("\n").length : 0;
+    case "files":
+      return c.files.length;
+  }
+}
+
+/** Resolve stored offset to an effective top-line index for the viewport. */
+function resolveOffset(
+  stored: number | undefined,
+  mode: InspectorMode,
+  totalLines: number,
+  maxLines: number
+): number {
+  const maxOffset = Math.max(0, totalLines - maxLines);
+  if (stored === undefined) {
+    return mode === "agent" ? maxOffset : 0;
+  }
+  if (stored < 0) return maxOffset;
+  return Math.min(stored, maxOffset);
 }
 
 function reducer(s: RenderState, a: Action): RenderState {
@@ -165,6 +205,29 @@ function reducer(s: RenderState, a: Action): RenderState {
       };
     case "inspector/loading":
       return { ...s, inspectorLoading: a.loading };
+    case "inspector/scroll": {
+      if (!s.selectedSlug) return s;
+      const key = scrollKey(s.selectedSlug, s.inspectorMode);
+      const isAgent = s.inspectorMode === "agent";
+      const total = totalLinesFor(s);
+      const maxOffset = Math.max(0, total - a.maxLines);
+      const half = Math.max(1, Math.floor(a.maxLines / 2));
+      const current = resolveOffset(s.inspectorOffsets.get(key), s.inspectorMode, total, a.maxLines);
+      let next = current;
+      switch (a.kind) {
+        case "top": next = 0; break;
+        case "bottom": next = isAgent ? -1 : maxOffset; break;
+        case "lineUp": next = Math.max(0, current - 1); break;
+        case "lineDown": next = Math.min(maxOffset, current + 1); break;
+        case "halfUp": next = Math.max(0, current - half); break;
+        case "halfDown": next = Math.min(maxOffset, current + half); break;
+      }
+      // Re-anchor agent transcripts to live tail when the user lands on bottom.
+      if (isAgent && a.kind !== "top" && next === maxOffset) next = -1;
+      const map = new Map(s.inspectorOffsets);
+      map.set(key, next);
+      return { ...s, inspectorOffsets: map };
+    }
     case "newTask/setDescription":
       return { ...s, newTaskDescription: a.value };
     case "flash":
@@ -358,11 +421,15 @@ export function App() {
         return;
       }
 
-      // gg chord.
+      // gg chord — now scrolls inspector to top instead of jumping list selection.
       if (state.pendingChord === "g") {
         dispatch({ type: "chord/set", key: null });
         if (input === "g") {
-          dispatch({ type: "select/first" });
+          dispatch({
+            type: "inspector/scroll",
+            kind: "top",
+            maxLines: inspectorMaxLines,
+          });
           return;
         }
       }
@@ -371,6 +438,7 @@ export function App() {
         exit();
         return;
       }
+      // Lowercase j/k + arrows still drive the list selection.
       if (input === "j" || key.downArrow) {
         dispatch({ type: "select/next" });
         return;
@@ -379,22 +447,58 @@ export function App() {
         dispatch({ type: "select/prev" });
         return;
       }
+      // [ / ] jump list selection to first / last (vim ]g-style).
+      if (input === "[") {
+        dispatch({ type: "select/first" });
+        return;
+      }
+      if (input === "]") {
+        dispatch({ type: "select/last" });
+        return;
+      }
+      // Inspector scroll: J/K (lines), ctrl-d/u (half-page), gg/G (top/bottom).
+      if (input === "J") {
+        dispatch({
+          type: "inspector/scroll",
+          kind: "lineDown",
+          maxLines: inspectorMaxLines,
+        });
+        return;
+      }
+      if (input === "K") {
+        dispatch({
+          type: "inspector/scroll",
+          kind: "lineUp",
+          maxLines: inspectorMaxLines,
+        });
+        return;
+      }
       if (input === "g") {
         dispatch({ type: "chord/set", key: "g" });
         return;
       }
       if (input === "G") {
-        dispatch({ type: "select/last" });
+        dispatch({
+          type: "inspector/scroll",
+          kind: "bottom",
+          maxLines: inspectorMaxLines,
+        });
         return;
       }
       if (key.ctrl && input === "d") {
-        for (let i = 0; i < Math.floor(rows / 4); i++)
-          dispatch({ type: "select/next" });
+        dispatch({
+          type: "inspector/scroll",
+          kind: "halfDown",
+          maxLines: inspectorMaxLines,
+        });
         return;
       }
       if (key.ctrl && input === "u") {
-        for (let i = 0; i < Math.floor(rows / 4); i++)
-          dispatch({ type: "select/prev" });
+        dispatch({
+          type: "inspector/scroll",
+          kind: "halfUp",
+          maxLines: inspectorMaxLines,
+        });
         return;
       }
       if (input === "n") {
@@ -458,7 +562,7 @@ export function App() {
         dispatch({ type: "mode/confirmMerge" });
         return;
       }
-      if (input === "K") {
+      if (input === "X") {
         if (!state.selectedSlug) return;
         dispatch({ type: "mode/confirmKill" });
         return;
@@ -566,7 +670,17 @@ export function App() {
     state.mode === "killing";
   const confirmHeight = showConfirm ? 5 : 0;
   const inspectorHeight = Math.max(8, rows - listHeight - confirmHeight - 3);
+  // Same formula as Inspector — the reducer needs it so it can clamp scrolls.
+  const inspectorMaxLines = Math.max(3, inspectorHeight - 4);
   const content = getContent(state, state.selectedSlug);
+  const offsetForView = state.selectedSlug
+    ? resolveOffset(
+        state.inspectorOffsets.get(scrollKey(state.selectedSlug, state.inspectorMode)),
+        state.inspectorMode,
+        totalLinesFor(state),
+        inspectorMaxLines
+      )
+    : 0;
 
   return (
     <Box flexDirection="column" height={rows}>
@@ -625,6 +739,7 @@ export function App() {
             files={content.files}
             loading={state.inspectorLoading}
             height={inspectorHeight}
+            offset={offsetForView}
           />
         )}
       </Box>
