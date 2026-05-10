@@ -137,6 +137,161 @@ export async function gitStatusShort(path: string): Promise<string> {
   }
 }
 
+/**
+ * Parsed entry from `git status --short`. Codes follow git's two-letter
+ * convention: index status + worktree status (e.g. " M", "A ", "??").
+ */
+export interface StatusEntry {
+  code: string;
+  path: string;
+  added: number;
+  deleted: number;
+}
+
+const NUMSTAT_LINE = /^(\d+|-)\s+(\d+|-)\s+(.+)$/;
+
+/**
+ * Parse `git status --short` plus `git diff --numstat HEAD` into a single
+ * structured list. Falls back gracefully when either command errors.
+ */
+export async function gitFiles(path: string): Promise<StatusEntry[]> {
+  let statusOut = "";
+  let numstatOut = "";
+  try {
+    const { stdout } = await execa(
+      "git",
+      ["-C", path, "status", "--short", "--no-renames"],
+      { reject: true, stripFinalNewline: true }
+    );
+    statusOut = stdout;
+  } catch {
+    return [];
+  }
+  try {
+    const { stdout } = await execa(
+      "git",
+      ["-C", path, "diff", "--numstat", "HEAD"],
+      { reject: true, stripFinalNewline: true }
+    );
+    numstatOut = stdout;
+  } catch {
+    /* numstat is best-effort */
+  }
+
+  const counts = new Map<string, { added: number; deleted: number }>();
+  for (const line of numstatOut.split("\n")) {
+    const m = line.match(NUMSTAT_LINE);
+    if (!m) continue;
+    const [, a = "0", d = "0", p = ""] = m;
+    counts.set(p, {
+      added: a === "-" ? 0 : Number(a),
+      deleted: d === "-" ? 0 : Number(d),
+    });
+  }
+
+  const entries: StatusEntry[] = [];
+  for (const line of statusOut.split("\n")) {
+    if (!line) continue;
+    const code = line.slice(0, 2);
+    const p = line.slice(3);
+    const c = counts.get(p) ?? { added: 0, deleted: 0 };
+    entries.push({ code, path: p, added: c.added, deleted: c.deleted });
+  }
+  return entries;
+}
+
+/** Unified diff between the worktree branch and `target`, capped to ~maxBytes. */
+export async function gitDiff(
+  worktreePath: string,
+  target = "main",
+  maxBytes = 200_000
+): Promise<string> {
+  try {
+    // diff main..HEAD shows what this branch has added on top of main.
+    const { stdout } = await execa(
+      "git",
+      ["-C", worktreePath, "diff", `${target}...HEAD`],
+      { reject: true, stripFinalNewline: true, maxBuffer: maxBytes * 4 }
+    );
+    if (!stdout) {
+      // Also include uncommitted changes when there are no committed ones.
+      const { stdout: uncommitted } = await execa(
+        "git",
+        ["-C", worktreePath, "diff", "HEAD"],
+        { reject: false, stripFinalNewline: true }
+      );
+      return uncommitted || "(no changes vs main)";
+    }
+    if (stdout.length > maxBytes) {
+      return (
+        stdout.slice(0, maxBytes) +
+        `\n\n…truncated (${stdout.length - maxBytes} more bytes)`
+      );
+    }
+    return stdout;
+  } catch (err) {
+    const e = err as ExecaError;
+    return `git diff failed: ${e.shortMessage ?? e.message}`;
+  }
+}
+
+/** Commit log for the branch ahead of `target`. */
+export async function gitLog(
+  worktreePath: string,
+  target = "main"
+): Promise<string> {
+  try {
+    const { stdout } = await execa(
+      "git",
+      [
+        "-C",
+        worktreePath,
+        "log",
+        "--oneline",
+        "--decorate",
+        `${target}..HEAD`,
+      ],
+      { reject: true, stripFinalNewline: true }
+    );
+    return stdout || "(no commits ahead of main)";
+  } catch (err) {
+    const e = err as ExecaError;
+    return `git log failed: ${e.shortMessage ?? e.message}`;
+  }
+}
+
+/**
+ * Heuristic: does this terminal viewport look like the agent is awaiting input?
+ * Strips ANSI, looks at the last ~15 non-blank lines for prompt markers.
+ *
+ * False positives are tolerable (we just show ⊙ instead of ●). False
+ * negatives are also tolerable (we miss the wait but the user still sees it
+ * by entering the pane). So lean conservative: only fire on clear signals.
+ */
+const ANSI_RE =
+  // eslint-disable-next-line no-control-regex
+  /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+export function detectWaiting(screen: string): boolean {
+  const cleaned = screen.replace(ANSI_RE, "");
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l.length > 0);
+  const tail = lines.slice(-15);
+  if (tail.length === 0) return false;
+  const joined = tail.join("\n");
+  // Yes/no-style prompts.
+  if (/\([yY]\/[nN]\)/.test(joined)) return true;
+  if (/\[[yY]\/[nN]\]/.test(joined)) return true;
+  // Question markers (Claude Code uses these for confirmations).
+  if (/(^|\n)\s*\?\s+\S/.test(joined)) return true;
+  // Trailing arrow/chevron prompt on the last line.
+  const last = tail[tail.length - 1] ?? "";
+  if (/[❯>›→]\s*$/.test(last)) return true;
+  return false;
+}
+
 /** TODO phase 2: derive TaskState from wt + zellij + state file. */
 export function refineState(task: Task, paneAlive: boolean): TaskState {
   if (paneAlive) return "running";

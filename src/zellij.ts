@@ -81,6 +81,28 @@ export async function focusPaneByName(name: string): Promise<boolean> {
 }
 
 /**
+ * Dump the current viewport of a pane (no scrollback by default).
+ * Returns "" when zellij isn't reachable or the pane is gone.
+ */
+export async function dumpScreen(
+  paneId: string,
+  opts: { full?: boolean } = {}
+): Promise<string> {
+  if (!inSession()) return "";
+  const args = ["action", "dump-screen", "-p", paneId];
+  if (opts.full) args.push("--full");
+  try {
+    const { stdout } = await execa("zellij", args, {
+      reject: true,
+      stripFinalNewline: true,
+    });
+    return stdout;
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Focus the pane named `name` and then close it.
  * Returns true on success, false when no pane with that name was found.
  *

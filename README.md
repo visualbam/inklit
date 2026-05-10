@@ -65,15 +65,15 @@ Movement is Vim/Helix-flavored.
 | `n`      | new task — prompts for description, then agent (`c`/`x`)  |
 | `enter`  | focus the selected task's zellij pane                      |
 | `q` / `Ctrl-C` | quit                                                 |
-| `m`      | merge selected task to main (with y/n confirm)             |
+| `m`      | review-then-merge — switches inspector to diff and asks y/n |
 | `K`      | kill selected task — close pane + remove worktree (with y/n confirm) |
+| `f`      | inspector → files (uncommitted, with `+/-` line counts)    |
+| `d`      | inspector → diff vs main                                   |
+| `l`      | inspector → log of commits ahead of main                   |
+| `a`      | inspector → live agent transcript tail                     |
 | `/`      | filter list *(stub — phase 2)*                             |
 | `?`      | help overlay *(stub — phase 2)*                            |
 | `r`      | force refresh *(stub — phase 2)*                           |
-| `a/d/f/l`| inspector mode toggles *(stubs — phase 2)*                 |
-
-Inspector currently only renders `git status --short --branch` for the
-selected worktree.
 
 ### Status icons
 
@@ -81,7 +81,7 @@ selected worktree.
 | ---- | -------- | -------------------------------------------------------- |
 | ●    | running  | a zellij pane named after the slug is alive              |
 | ✓    | ready    | worktree exists, no live pane                            |
-| ⊙    | waiting  | *not yet detected — needs `dump-screen` heuristic*       |
+| ⊙    | waiting  | running pane whose tail looks like a `(y/n)`/`?`/`❯` prompt |
 | ✗    | failed   | *not yet detected — needs exit-code state file*          |
 | ·    | merged   | *not yet detected — fade-out is phase 2*                 |
 
@@ -124,18 +124,34 @@ When you press `n`:
    inside it, and surfaces it as a named zellij pane. The next 1.5s poll picks
    it up and shows it as `running`.
 
+### Inspector modes
+
+The bottom half of the screen is the inspector. Toggle with `f`/`d`/`l`/`a`:
+
+- **`f` files** — `git status --short` parsed into a list, each entry colored
+  by status (untracked / modified / added / deleted) with `+N -M` line counts
+  from `git diff --numstat HEAD`.
+- **`d` diff** — unified diff of `<branch>...main` (or, if the branch has no
+  commits ahead, the uncommitted `git diff HEAD`). Capped at ~200KB.
+- **`l` log** — `git log --oneline --decorate main..HEAD`.
+- **`a` agent** — last 200 lines of the agent's zellij pane via
+  `zellij action dump-screen -p <pane_id>`. Updates every 1.5s.
+
+The diff and files views also drive the new merge flow: pressing `m` jumps
+the inspector to **diff** mode automatically and shows a confirm bar at the
+bottom. You see exactly what you're about to merge before pressing `y`.
+
 ### Destructive actions
 
 `m` runs `wt -C <worktree> merge main -y` (squash + auto-remove on success).
 `K` focuses the pane → `zellij action close-pane` → `wt remove <slug> -y -f -D`
 (force the worktree gone even with uncommitted changes; force-delete the
-branch even if unmerged). Both prompt for `y`/`n` first; `esc` cancels.
+branch even if unmerged). Both prompt for `y`/`n` first; `esc` cancels. `m`
+forces the inspector to diff view first; `K` does the same so you can see
+what you'd be throwing away.
 
 ## Limitations & TODOs (phase 2)
 
-- [ ] Inspector modes: `[a]` agent transcript via `zellij action dump-screen`,
-      `[d]` diff, `[f]` files, `[l]` log.
-- [ ] `waiting` state detection (tail dump-screen, look for prompt glyphs).
 - [ ] `failed` state detection (track pane exit codes in
       `$XDG_STATE_HOME/lazyagent/exits.json`).
 - [ ] `merged` fade-out (~30s after `m`).

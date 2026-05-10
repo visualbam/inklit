@@ -7,25 +7,41 @@ import { DescriptionPrompt, AgentPicker } from "./NewTaskPrompt.js";
 import { ConfirmPrompt } from "./ConfirmPrompt.js";
 import {
   listTasks,
-  gitStatusShort,
-  refineState,
+  gitDiff,
+  gitFiles,
+  gitLog,
+  detectWaiting,
   mergeToMain,
   removeWorktree,
+  type StatusEntry,
 } from "../wt.js";
-import { findPaneByName, inSession } from "../zellij.js";
+import {
+  findPaneByName,
+  inSession,
+  dumpScreen,
+  focusPaneByName,
+  closePaneByName,
+} from "../zellij.js";
 import { spawnAgent } from "../agent.js";
-import { focusPaneByName, closePaneByName } from "../zellij.js";
-import type { AgentKind, AppState, Task } from "../model.js";
+import type { AgentKind, AppState, InspectorMode, Task } from "../model.js";
 import { initialState } from "../model.js";
 
+interface ModeContent {
+  diff: string;
+  log: string;
+  agent: string;
+  files: StatusEntry[];
+}
+
+const EMPTY_CONTENT: ModeContent = { diff: "", log: "", agent: "", files: [] };
+
 type Action =
-  | { type: "tasks/loaded"; tasks: Task[] }
+  | { type: "tasks/loaded"; tasks: Task[]; agents: Map<string, string> }
   | { type: "tasks/error"; message: string }
   | { type: "select/next" }
   | { type: "select/prev" }
   | { type: "select/first" }
   | { type: "select/last" }
-  | { type: "mode/setListSelection"; slug: string | null }
   | { type: "mode/newTaskDescription" }
   | { type: "mode/newTaskAgent"; description: string }
   | { type: "mode/spawning" }
@@ -34,23 +50,44 @@ type Action =
   | { type: "mode/merging" }
   | { type: "mode/killing" }
   | { type: "mode/list" }
+  | { type: "inspector/setMode"; mode: InspectorMode }
+  | { type: "inspector/data"; slug: string; key: keyof ModeContent; value: any }
+  | { type: "inspector/loading"; loading: boolean }
   | { type: "newTask/setDescription"; value: string }
   | { type: "flash"; message: string | null }
   | { type: "error"; message: string | null }
-  | { type: "chord/set"; key: string | null }
-  | { type: "inspector/content"; content: string }
-  | { type: "inspector/loading" };
+  | { type: "chord/set"; key: string | null };
 
 interface RenderState extends AppState {
-  inspectorContent: string;
+  /** Per-slug per-mode cache. */
+  content: Map<string, ModeContent>;
   inspectorLoading: boolean;
+  /** Live tail from `dump-screen` per running slug; feeds agent mode + waiting. */
+  agentTails: Map<string, string>;
 }
 
 const initial: RenderState = {
   ...initialState,
-  inspectorContent: "",
+  content: new Map(),
   inspectorLoading: false,
+  agentTails: new Map(),
 };
+
+function getContent(s: RenderState, slug: string | null): ModeContent {
+  if (!slug) return EMPTY_CONTENT;
+  return s.content.get(slug) ?? EMPTY_CONTENT;
+}
+
+function setContent(
+  s: RenderState,
+  slug: string,
+  patch: Partial<ModeContent>
+): Map<string, ModeContent> {
+  const next = new Map(s.content);
+  const prev = next.get(slug) ?? EMPTY_CONTENT;
+  next.set(slug, { ...prev, ...patch });
+  return next;
+}
 
 function reducer(s: RenderState, a: Action): RenderState {
   switch (a.type) {
@@ -60,7 +97,7 @@ function reducer(s: RenderState, a: Action): RenderState {
       if (!selectedSlug || !tasks.find((t) => t.slug === selectedSlug)) {
         selectedSlug = tasks[0]?.slug ?? null;
       }
-      return { ...s, tasks, selectedSlug, error: null };
+      return { ...s, tasks, selectedSlug, error: null, agentTails: a.agents };
     }
     case "tasks/error":
       return { ...s, error: a.message };
@@ -92,15 +129,26 @@ function reducer(s: RenderState, a: Action): RenderState {
     case "mode/spawning":
       return { ...s, mode: "spawning" };
     case "mode/confirmMerge":
-      return { ...s, mode: "confirmMerge" };
+      // Switch inspector to diff so user reviews before confirming.
+      return { ...s, mode: "confirmMerge", inspectorMode: "diff" };
     case "mode/confirmKill":
-      return { ...s, mode: "confirmKill" };
+      return { ...s, mode: "confirmKill", inspectorMode: "diff" };
     case "mode/merging":
       return { ...s, mode: "merging" };
     case "mode/killing":
       return { ...s, mode: "killing" };
     case "mode/list":
       return { ...s, mode: "list", newTaskDescription: "" };
+    case "inspector/setMode":
+      return { ...s, inspectorMode: a.mode };
+    case "inspector/data":
+      return {
+        ...s,
+        content: setContent(s, a.slug, { [a.key]: a.value } as Partial<ModeContent>),
+        inspectorLoading: false,
+      };
+    case "inspector/loading":
+      return { ...s, inspectorLoading: a.loading };
     case "newTask/setDescription":
       return { ...s, newTaskDescription: a.value };
     case "flash":
@@ -109,16 +157,13 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, error: a.message };
     case "chord/set":
       return { ...s, pendingChord: a.key };
-    case "inspector/content":
-      return { ...s, inspectorContent: a.content, inspectorLoading: false };
-    case "inspector/loading":
-      return { ...s, inspectorLoading: true };
     default:
       return s;
   }
 }
 
 const POLL_MS = 1500;
+const AGENT_TAIL_LINES = 200;
 
 export function App() {
   const { exit } = useApp();
@@ -128,9 +173,9 @@ export function App() {
 
   const [state, dispatch] = useReducer(reducer, initial);
   const inSess = useMemo(() => inSession(), []);
-  const lastInspectedRef = useRef<{ slug: string; mtime: number } | null>(null);
+  const fetchedRef = useRef<Map<string, number>>(new Map());
 
-  // Poll wt + zellij.
+  // Poll wt + zellij. dump-screen for each running pane to feed waiting + agent.
   useEffect(() => {
     let cancelled = false;
     let timer: NodeJS.Timeout | null = null;
@@ -138,22 +183,32 @@ export function App() {
     const tick = async () => {
       try {
         const tasks = await listTasks();
-        // Refine state with zellij pane probe (best-effort).
+        const agents = new Map<string, string>();
         const refined = await Promise.all(
           tasks.map(async (t) => {
             try {
               const pane = await findPaneByName(t.slug);
+              if (!pane) return { ...t, state: "ready" as const };
+              const paneId =
+                pane.pane_id ??
+                (typeof pane.id === "number" ? `terminal_${pane.id}` : null);
+              let screen = "";
+              if (paneId) {
+                screen = await dumpScreen(paneId);
+                if (screen) agents.set(t.slug, screen);
+              }
+              const waiting = screen ? detectWaiting(screen) : false;
               return {
                 ...t,
-                state: refineState(t, !!pane),
-                paneId: pane?.pane_id,
+                state: waiting ? ("waiting" as const) : ("running" as const),
+                paneId: paneId ?? undefined,
               };
             } catch {
               return t;
             }
           })
         );
-        if (!cancelled) dispatch({ type: "tasks/loaded", tasks: refined });
+        if (!cancelled) dispatch({ type: "tasks/loaded", tasks: refined, agents });
       } catch (err) {
         if (!cancelled) {
           dispatch({
@@ -172,29 +227,60 @@ export function App() {
     };
   }, []);
 
-  // Inspector content for selection.
+  // Push agent tails into per-slug content so Inspector renders without extra fetch.
+  useEffect(() => {
+    for (const [slug, text] of state.agentTails) {
+      // Only the last N lines to keep state small.
+      const lines = text.split("\n");
+      const tail = lines.slice(-AGENT_TAIL_LINES).join("\n");
+      const existing = state.content.get(slug)?.agent;
+      if (existing !== tail) {
+        dispatch({ type: "inspector/data", slug, key: "agent", value: tail });
+      }
+    }
+  }, [state.agentTails]);
+
+  // Fetch inspector content for the selection on mode change / selection change.
   useEffect(() => {
     const slug = state.selectedSlug;
+    if (!slug) return;
     const task = state.tasks.find((t) => t.slug === slug);
-    if (!task) {
-      dispatch({ type: "inspector/content", content: "" });
-      return;
-    }
-    // Avoid re-fetching on every poll for the same selection.
+    if (!task) return;
+    const mode = state.inspectorMode;
+    if (mode === "agent") return; // fed by poll loop
+
+    const cacheKey = `${slug}:${mode}`;
+    const last = fetchedRef.current.get(cacheKey) ?? 0;
     const now = Date.now();
-    const last = lastInspectedRef.current;
-    if (last && last.slug === task.slug && now - last.mtime < POLL_MS) return;
-    lastInspectedRef.current = { slug: task.slug, mtime: now };
+    // Refetch every 3s for the visible mode.
+    if (now - last < 3000) return;
+    fetchedRef.current.set(cacheKey, now);
 
     let cancelled = false;
-    dispatch({ type: "inspector/loading" });
-    gitStatusShort(task.path).then((content) => {
-      if (!cancelled) dispatch({ type: "inspector/content", content });
-    });
+    dispatch({ type: "inspector/loading", loading: true });
+    (async () => {
+      try {
+        if (mode === "diff") {
+          const value = await gitDiff(task.path);
+          if (!cancelled)
+            dispatch({ type: "inspector/data", slug, key: "diff", value });
+        } else if (mode === "log") {
+          const value = await gitLog(task.path);
+          if (!cancelled)
+            dispatch({ type: "inspector/data", slug, key: "log", value });
+        } else if (mode === "files") {
+          const value = await gitFiles(task.path);
+          if (!cancelled)
+            dispatch({ type: "inspector/data", slug, key: "files", value });
+        }
+      } finally {
+        if (!cancelled) dispatch({ type: "inspector/loading", loading: false });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [state.selectedSlug, state.tasks]);
+  }, [state.selectedSlug, state.inspectorMode, state.tasks]);
 
   // Flash auto-clear.
   useEffect(() => {
@@ -219,7 +305,6 @@ export function App() {
       if (state.mode === "spawning") return;
       if (state.mode === "merging" || state.mode === "killing") return;
 
-      // Confirmations (block other input until resolved).
       if (state.mode === "confirmMerge") {
         if (input === "y" || input === "Y") {
           const slug = state.selectedSlug;
@@ -313,6 +398,24 @@ export function App() {
         return;
       }
 
+      // Inspector mode toggles.
+      if (input === "f") {
+        dispatch({ type: "inspector/setMode", mode: "files" });
+        return;
+      }
+      if (input === "d") {
+        dispatch({ type: "inspector/setMode", mode: "diff" });
+        return;
+      }
+      if (input === "l") {
+        dispatch({ type: "inspector/setMode", mode: "log" });
+        return;
+      }
+      if (input === "a") {
+        dispatch({ type: "inspector/setMode", mode: "agent" });
+        return;
+      }
+
       if (input === "m") {
         if (!state.selectedSlug) return;
         dispatch({ type: "mode/confirmMerge" });
@@ -325,15 +428,7 @@ export function App() {
       }
 
       // Stubs.
-      if (
-        input === "/" ||
-        input === "?" ||
-        input === "r" ||
-        input === "f" ||
-        input === "d" ||
-        input === "l" ||
-        input === "a"
-      ) {
+      if (input === "/" || input === "?" || input === "r") {
         dispatch({
           type: "flash",
           message: `'${input}' not yet implemented (see README → TODOs)`,
@@ -351,10 +446,7 @@ export function App() {
     try {
       const res = await spawnAgent({ description, agent });
       dispatch({ type: "mode/list" });
-      dispatch({
-        type: "flash",
-        message: `Spawned ${res.slug} (${agent})`,
-      });
+      dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
     } catch (err) {
       dispatch({ type: "mode/list" });
       dispatch({
@@ -384,7 +476,6 @@ export function App() {
   async function doKill(slug: string) {
     dispatch({ type: "mode/killing" });
     try {
-      // Best-effort pane closure first; ignore failure (pane may already be gone).
       if (inSess) await closePaneByName(slug);
       await removeWorktree(slug);
       dispatch({ type: "mode/list" });
@@ -398,7 +489,15 @@ export function App() {
     }
   }
 
-  const listHeight = Math.max(5, Math.floor(rows / 2));
+  const listHeight = Math.max(5, Math.floor(rows / 3));
+  const showConfirm =
+    state.mode === "confirmMerge" ||
+    state.mode === "confirmKill" ||
+    state.mode === "merging" ||
+    state.mode === "killing";
+  const confirmHeight = showConfirm ? 5 : 0;
+  const inspectorHeight = Math.max(8, rows - listHeight - confirmHeight - 3);
+  const content = getContent(state, state.selectedSlug);
 
   return (
     <Box flexDirection="column" height={rows}>
@@ -438,23 +537,30 @@ export function App() {
           <Box paddingX={1}>
             <Text color="yellow">spawning…</Text>
           </Box>
-        ) : state.mode === "confirmMerge" ? (
-          <ConfirmPrompt action="merge" slug={state.selectedSlug ?? ""} />
-        ) : state.mode === "confirmKill" ? (
-          <ConfirmPrompt action="kill" slug={state.selectedSlug ?? ""} />
-        ) : state.mode === "merging" ? (
-          <ConfirmPrompt action="merge" slug={state.selectedSlug ?? ""} busy />
-        ) : state.mode === "killing" ? (
-          <ConfirmPrompt action="kill" slug={state.selectedSlug ?? ""} busy />
         ) : (
           <Inspector
             task={selectedTask}
             mode={state.inspectorMode}
-            content={state.inspectorContent}
+            diff={content.diff}
+            log={content.log}
+            agent={content.agent}
+            files={content.files}
             loading={state.inspectorLoading}
+            height={inspectorHeight}
           />
         )}
       </Box>
+      {showConfirm ? (
+        <ConfirmPrompt
+          action={
+            state.mode === "confirmKill" || state.mode === "killing"
+              ? "kill"
+              : "merge"
+          }
+          slug={state.selectedSlug ?? ""}
+          busy={state.mode === "merging" || state.mode === "killing"}
+        />
+      ) : null}
       <StatusBar
         flash={state.flash}
         error={state.error}
