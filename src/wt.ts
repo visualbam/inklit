@@ -160,7 +160,14 @@ export async function gitFiles(path: string): Promise<StatusEntry[]> {
   try {
     const { stdout } = await execa(
       "git",
-      ["-C", path, "status", "--short", "--no-renames"],
+      [
+        "-C",
+        path,
+        "status",
+        "--short",
+        "--no-renames",
+        "--untracked-files=all",
+      ],
       { reject: true, stripFinalNewline: true }
     );
     statusOut = stdout;
@@ -200,35 +207,72 @@ export async function gitFiles(path: string): Promise<StatusEntry[]> {
   return entries;
 }
 
-/** Unified diff between the worktree branch and `target`, capped to ~maxBytes. */
+/**
+ * Unified diff for everything this worktree has done relative to `target`:
+ * committed changes (`target...HEAD`), uncommitted modifications (`diff HEAD`),
+ * AND every untracked file's contents synthesized via `diff --no-index`. Capped
+ * to ~maxBytes total.
+ *
+ * Untracked content matters: a brand-new file in a brand-new folder is invisible
+ * to plain `git diff`, so without this the "diff" pane lies about what's there.
+ */
 export async function gitDiff(
   worktreePath: string,
   target = "main",
   maxBytes = 200_000
 ): Promise<string> {
   try {
-    // diff main..HEAD shows what this branch has added on top of main.
-    const { stdout } = await execa(
+    const parts: string[] = [];
+
+    const { stdout: committed } = await execa(
       "git",
       ["-C", worktreePath, "diff", `${target}...HEAD`],
-      { reject: true, stripFinalNewline: true, maxBuffer: maxBytes * 4 }
+      { reject: false, stripFinalNewline: true, maxBuffer: maxBytes * 4 }
     );
-    if (!stdout) {
-      // Also include uncommitted changes when there are no committed ones.
-      const { stdout: uncommitted } = await execa(
+    if (committed) parts.push(committed);
+
+    const { stdout: uncommitted } = await execa(
+      "git",
+      ["-C", worktreePath, "diff", "HEAD"],
+      { reject: false, stripFinalNewline: true, maxBuffer: maxBytes * 4 }
+    );
+    if (uncommitted) parts.push(uncommitted);
+
+    const { stdout: untrackedList } = await execa(
+      "git",
+      ["-C", worktreePath, "ls-files", "--others", "--exclude-standard"],
+      { reject: false, stripFinalNewline: true }
+    );
+    const untracked = untrackedList
+      ? untrackedList.split("\n").filter(Boolean)
+      : [];
+    for (const file of untracked) {
+      // --no-index always exits 1 when files differ; reject:false swallows that.
+      const { stdout } = await execa(
         "git",
-        ["-C", worktreePath, "diff", "HEAD"],
-        { reject: false, stripFinalNewline: true }
+        [
+          "-C",
+          worktreePath,
+          "diff",
+          "--no-index",
+          "--",
+          "/dev/null",
+          file,
+        ],
+        { reject: false, stripFinalNewline: true, maxBuffer: maxBytes }
       );
-      return uncommitted || "(no changes vs main)";
+      if (stdout) parts.push(stdout);
     }
-    if (stdout.length > maxBytes) {
+
+    const combined = parts.join("\n");
+    if (!combined) return "(no changes vs main)";
+    if (combined.length > maxBytes) {
       return (
-        stdout.slice(0, maxBytes) +
-        `\n\n…truncated (${stdout.length - maxBytes} more bytes)`
+        combined.slice(0, maxBytes) +
+        `\n\n…truncated (${combined.length - maxBytes} more bytes)`
       );
     }
-    return stdout;
+    return combined;
   } catch (err) {
     const e = err as ExecaError;
     return `git diff failed: ${e.shortMessage ?? e.message}`;
