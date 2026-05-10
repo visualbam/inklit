@@ -30,7 +30,16 @@ export type InspectorMode = "files" | "diff" | "log" | "agent";
 export interface AppState {
   tasks: Task[];
   selectedSlug: string | null;
-  mode: "list" | "newTaskDescription" | "newTaskAgent" | "spawning" | "error";
+  mode:
+    | "list"
+    | "newTaskDescription"
+    | "newTaskAgent"
+    | "spawning"
+    | "confirmMerge"
+    | "confirmKill"
+    | "merging"
+    | "killing"
+    | "error";
   inspectorMode: InspectorMode;
   newTaskDescription: string;
   flash: string | null;

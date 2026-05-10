@@ -142,3 +142,45 @@ export function refineState(task: Task, paneAlive: boolean): TaskState {
   if (paneAlive) return "running";
   return task.state; // remains "ready" by default in v0
 }
+
+/**
+ * Squash-merge a worktree's branch into `target` (default `main`) and let
+ * worktrunk remove the worktree. `-y` skips the interactive approval; we've
+ * already confirmed in the UI.
+ */
+export async function mergeToMain(
+  worktreePath: string,
+  target = "main"
+): Promise<void> {
+  try {
+    await execa("wt", ["-C", worktreePath, "merge", target, "-y"], {
+      reject: true,
+    });
+  } catch (err) {
+    const e = err as ExecaError;
+    const stderr = typeof e.stderr === "string" ? e.stderr : "";
+    throw new WtError(
+      `wt merge ${target} failed: ${e.shortMessage ?? e.message}`,
+      stderr
+    );
+  }
+}
+
+/**
+ * Remove a worktree by branch name. Forces both worktree removal (uncommitted
+ * changes) and unmerged-branch deletion — `K` is "I want this gone."
+ */
+export async function removeWorktree(slug: string): Promise<void> {
+  try {
+    await execa("wt", ["remove", slug, "-y", "-f", "-D", "--foreground"], {
+      reject: true,
+    });
+  } catch (err) {
+    const e = err as ExecaError;
+    const stderr = typeof e.stderr === "string" ? e.stderr : "";
+    throw new WtError(
+      `wt remove ${slug} failed: ${e.shortMessage ?? e.message}`,
+      stderr
+    );
+  }
+}

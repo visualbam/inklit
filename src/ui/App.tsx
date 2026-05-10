@@ -4,10 +4,17 @@ import { TaskList } from "./List.js";
 import { Inspector } from "./Inspector.js";
 import { StatusBar } from "./StatusBar.js";
 import { DescriptionPrompt, AgentPicker } from "./NewTaskPrompt.js";
-import { listTasks, gitStatusShort, refineState } from "../wt.js";
+import { ConfirmPrompt } from "./ConfirmPrompt.js";
+import {
+  listTasks,
+  gitStatusShort,
+  refineState,
+  mergeToMain,
+  removeWorktree,
+} from "../wt.js";
 import { findPaneByName, inSession } from "../zellij.js";
 import { spawnAgent } from "../agent.js";
-import { focusPaneByName } from "../zellij.js";
+import { focusPaneByName, closePaneByName } from "../zellij.js";
 import type { AgentKind, AppState, Task } from "../model.js";
 import { initialState } from "../model.js";
 
@@ -22,6 +29,10 @@ type Action =
   | { type: "mode/newTaskDescription" }
   | { type: "mode/newTaskAgent"; description: string }
   | { type: "mode/spawning" }
+  | { type: "mode/confirmMerge" }
+  | { type: "mode/confirmKill" }
+  | { type: "mode/merging" }
+  | { type: "mode/killing" }
   | { type: "mode/list" }
   | { type: "newTask/setDescription"; value: string }
   | { type: "flash"; message: string | null }
@@ -80,6 +91,14 @@ function reducer(s: RenderState, a: Action): RenderState {
       };
     case "mode/spawning":
       return { ...s, mode: "spawning" };
+    case "mode/confirmMerge":
+      return { ...s, mode: "confirmMerge" };
+    case "mode/confirmKill":
+      return { ...s, mode: "confirmKill" };
+    case "mode/merging":
+      return { ...s, mode: "merging" };
+    case "mode/killing":
+      return { ...s, mode: "killing" };
     case "mode/list":
       return { ...s, mode: "list", newTaskDescription: "" };
     case "newTask/setDescription":
@@ -198,6 +217,33 @@ export function App() {
         return;
       }
       if (state.mode === "spawning") return;
+      if (state.mode === "merging" || state.mode === "killing") return;
+
+      // Confirmations (block other input until resolved).
+      if (state.mode === "confirmMerge") {
+        if (input === "y" || input === "Y") {
+          const slug = state.selectedSlug;
+          if (slug) void doMerge(slug);
+          return;
+        }
+        if (input === "n" || input === "N" || key.escape) {
+          dispatch({ type: "mode/list" });
+          return;
+        }
+        return;
+      }
+      if (state.mode === "confirmKill") {
+        if (input === "y" || input === "Y") {
+          const slug = state.selectedSlug;
+          if (slug) void doKill(slug);
+          return;
+        }
+        if (input === "n" || input === "N" || key.escape) {
+          dispatch({ type: "mode/list" });
+          return;
+        }
+        return;
+      }
 
       // gg chord.
       if (state.pendingChord === "g") {
@@ -267,10 +313,19 @@ export function App() {
         return;
       }
 
+      if (input === "m") {
+        if (!state.selectedSlug) return;
+        dispatch({ type: "mode/confirmMerge" });
+        return;
+      }
+      if (input === "K") {
+        if (!state.selectedSlug) return;
+        dispatch({ type: "mode/confirmKill" });
+        return;
+      }
+
       // Stubs.
       if (
-        input === "m" ||
-        input === "K" ||
         input === "/" ||
         input === "?" ||
         input === "r" ||
@@ -300,6 +355,40 @@ export function App() {
         type: "flash",
         message: `Spawned ${res.slug} (${agent})`,
       });
+    } catch (err) {
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function doMerge(slug: string) {
+    const task = state.tasks.find((t) => t.slug === slug);
+    if (!task) return;
+    dispatch({ type: "mode/merging" });
+    try {
+      await mergeToMain(task.path);
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "flash", message: `Merged ${slug} → main` });
+    } catch (err) {
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function doKill(slug: string) {
+    dispatch({ type: "mode/killing" });
+    try {
+      // Best-effort pane closure first; ignore failure (pane may already be gone).
+      if (inSess) await closePaneByName(slug);
+      await removeWorktree(slug);
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "flash", message: `Killed ${slug}` });
     } catch (err) {
       dispatch({ type: "mode/list" });
       dispatch({
@@ -349,6 +438,14 @@ export function App() {
           <Box paddingX={1}>
             <Text color="yellow">spawning…</Text>
           </Box>
+        ) : state.mode === "confirmMerge" ? (
+          <ConfirmPrompt action="merge" slug={state.selectedSlug ?? ""} />
+        ) : state.mode === "confirmKill" ? (
+          <ConfirmPrompt action="kill" slug={state.selectedSlug ?? ""} />
+        ) : state.mode === "merging" ? (
+          <ConfirmPrompt action="merge" slug={state.selectedSlug ?? ""} busy />
+        ) : state.mode === "killing" ? (
+          <ConfirmPrompt action="kill" slug={state.selectedSlug ?? ""} busy />
         ) : (
           <Inspector
             task={selectedTask}

@@ -65,8 +65,8 @@ Movement is Vim/Helix-flavored.
 | `n`      | new task — prompts for description, then agent (`c`/`x`)  |
 | `enter`  | focus the selected task's zellij pane                      |
 | `q` / `Ctrl-C` | quit                                                 |
-| `m`      | merge to main *(stub — phase 2)*                           |
-| `K`      | kill task *(stub — phase 2)*                               |
+| `m`      | merge selected task to main (with y/n confirm)             |
+| `K`      | kill selected task — close pane + remove worktree (with y/n confirm) |
 | `/`      | filter list *(stub — phase 2)*                             |
 | `?`      | help overlay *(stub — phase 2)*                            |
 | `r`      | force refresh *(stub — phase 2)*                           |
@@ -124,6 +124,13 @@ When you press `n`:
    inside it, and surfaces it as a named zellij pane. The next 1.5s poll picks
    it up and shows it as `running`.
 
+### Destructive actions
+
+`m` runs `wt -C <worktree> merge main -y` (squash + auto-remove on success).
+`K` focuses the pane → `zellij action close-pane` → `wt remove <slug> -y -f -D`
+(force the worktree gone even with uncommitted changes; force-delete the
+branch even if unmerged). Both prompt for `y`/`n` first; `esc` cancels.
+
 ## Limitations & TODOs (phase 2)
 
 - [ ] Inspector modes: `[a]` agent transcript via `zellij action dump-screen`,
@@ -132,8 +139,6 @@ When you press `n`:
 - [ ] `failed` state detection (track pane exit codes in
       `$XDG_STATE_HOME/lazyagent/exits.json`).
 - [ ] `merged` fade-out (~30s after `m`).
-- [ ] `m` merge action — wraps `wt merge main` in the selected worktree.
-- [ ] `K` kill action — close pane + `wt remove`.
 - [ ] `/` filter the list.
 - [ ] `?` help overlay.
 - [ ] `r` force refresh (today the loop is fixed at 1.5s).

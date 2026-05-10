@@ -81,6 +81,25 @@ export async function focusPaneByName(name: string): Promise<boolean> {
 }
 
 /**
+ * Focus the pane named `name` and then close it.
+ * Returns true on success, false when no pane with that name was found.
+ *
+ * Zellij has no `close-pane-by-id`, so the only way to close a specific pane
+ * is to focus it first. There's a benign race if the user moves focus
+ * mid-call; in practice the two actions are <50ms apart.
+ */
+export async function closePaneByName(name: string): Promise<boolean> {
+  const focused = await focusPaneByName(name);
+  if (!focused) return false;
+  try {
+    await execa("zellij", ["action", "close-pane"], { reject: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Spawn a new named pane running `command`. Returns the created pane id, or
  * null when zellij doesn't echo one (rare).
  *
