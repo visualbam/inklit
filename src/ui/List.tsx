@@ -43,20 +43,28 @@ export function TaskList({ tasks, selectedSlug, width }: Props) {
         const color = STATE_COLOR[t.state];
         const stateLabel = STATE_LABEL[t.state];
         const dirtyMark = t.dirty ? "*" : " ";
+        // Inner <Text> color/dimColor wins over the wrapper, so when selected
+        // we have to explicitly drop them — otherwise dim grey or per-state
+        // colors render on top of blueBright and the row goes unreadable.
         return (
           <Box key={t.slug} paddingX={1}>
             <Text
               backgroundColor={selected ? "blueBright" : undefined}
               color={selected ? "white" : undefined}
+              bold={selected}
             >
-              <Text color={color}>{icon}</Text>
+              <Text color={selected ? "white" : color}>{icon}</Text>
               <Text>{dirtyMark}</Text>
-              <Text bold={selected}>{pad(t.slug, slugCol)}</Text>{" "}
+              <Text>{pad(t.slug, slugCol)}</Text>{" "}
               <Text dimColor={!selected}>
                 {pad(t.error ?? t.subject, subjectCol)}
               </Text>{" "}
-              <Text color={color}>{pad(stateLabel, 9)}</Text>{" "}
-              <Text dimColor>{pad(formatAge(t.ageSeconds), 5)}</Text>
+              <Text color={selected ? "white" : color}>
+                {pad(stateLabel, 9)}
+              </Text>{" "}
+              <Text dimColor={!selected}>
+                {pad(formatAge(t.ageSeconds), 5)}
+              </Text>
             </Text>
           </Box>
         );
