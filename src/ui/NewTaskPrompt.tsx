@@ -32,10 +32,15 @@ export function DescriptionPrompt({ value, onChange, onSubmit }: Props) {
 }
 
 interface AgentPickerProps {
-  description: string;
+  /** Human-readable target for the picker — task description or slug. */
+  label: string;
+  /** Headline verb: "Pick agent for" (default) or "Resume", etc. */
+  intent?: "spawn" | "resume";
 }
 
-export function AgentPicker({ description }: AgentPickerProps) {
+export function AgentPicker({ label, intent = "spawn" }: AgentPickerProps) {
+  const heading =
+    intent === "resume" ? "Resume which agent?" : "Pick agent for:";
   return (
     <Box
       borderStyle="round"
@@ -44,20 +49,22 @@ export function AgentPicker({ description }: AgentPickerProps) {
       flexDirection="column"
     >
       <Text bold color="cyan">
-        Pick agent for: <Text color="white">{description}</Text>
+        {heading} <Text color="white">{label}</Text>
       </Text>
       <Box marginTop={1} flexDirection="column">
         <Text>
           <Text color="cyan" bold>
             c
           </Text>
-          {"  "}claude code
+          {"  "}claude code{" "}
+          {intent === "resume" ? <Text dimColor>(--continue)</Text> : null}
         </Text>
         <Text>
           <Text color="cyan" bold>
             x
           </Text>
-          {"  "}codex
+          {"  "}codex{" "}
+          {intent === "resume" ? <Text dimColor>(resume --last)</Text> : null}
         </Text>
         <Text dimColor>esc  cancel</Text>
       </Box>

@@ -39,6 +39,8 @@ export interface AppState {
     | "confirmKill"
     | "merging"
     | "killing"
+    | "resumeAgentPicker"
+    | "resuming"
     | "error";
   inspectorMode: InspectorMode;
   newTaskDescription: string;
@@ -47,6 +49,8 @@ export interface AppState {
   pendingChord: string | null;
   /** Filled by NewTaskPrompt → handed to spawn(). */
   pendingDescription: string;
+  /** Slug awaiting agent selection during a resume flow. */
+  pendingResumeSlug: string | null;
 }
 
 export const initialState: AppState = {
@@ -59,4 +63,5 @@ export const initialState: AppState = {
   error: null,
   pendingChord: null,
   pendingDescription: "",
+  pendingResumeSlug: null,
 };

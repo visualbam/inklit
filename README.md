@@ -63,7 +63,7 @@ Movement is Vim/Helix-flavored.
 | `Ctrl-D` | half-page down                                             |
 | `Ctrl-U` | half-page up                                               |
 | `n`      | new task — prompts for description, then agent (`c`/`x`)  |
-| `enter`  | focus the selected task's zellij pane                      |
+| `enter`  | running/waiting → focus pane; ready → resume agent         |
 | `q` / `Ctrl-C` | quit                                                 |
 | `m`      | review-then-merge — switches inspector to diff and asks y/n |
 | `K`      | kill selected task — close pane + remove worktree (with y/n confirm) |
@@ -123,6 +123,26 @@ When you press `n`:
    That single command creates the worktree (worktrunk), launches the agent
    inside it, and surfaces it as a named zellij pane. The next 1.5s poll picks
    it up and shows it as `running`.
+
+### Resume
+
+Closing an agent's zellij pane (or letting it exit) leaves the task in
+`✓ ready`. Press `enter` on a `ready` task and lazyagent will spawn a fresh
+pane in the existing worktree, running the agent's resume incantation:
+
+- **claude** → `claude --continue` (most recent session in cwd)
+- **codex** → `codex resume --last`
+
+The agent picks up its previous conversation; the worktree is unchanged so
+any uncommitted work is still there. The status bar verb on `enter` flips
+between `focus` (live pane) and `resume` (no pane) so you know which it'll do.
+
+The agent kind is recorded at spawn time in
+`$XDG_STATE_HOME/lazyagent/tasks.json` (default `~/.local/state/...`). Tasks
+created before lazyagent existed — or via `wt switch` directly — won't have
+an entry, so resume opens the agent picker and remembers your choice for
+next time. `K` (kill) drops the entry so a future task with the same slug
+starts clean.
 
 ### Inspector modes
 

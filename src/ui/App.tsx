@@ -22,7 +22,8 @@ import {
   focusPaneByName,
   closePaneByName,
 } from "../zellij.js";
-import { spawnAgent } from "../agent.js";
+import { spawnAgent, resumeAgent } from "../agent.js";
+import { getAgent, recordRemove } from "../state.js";
 import type { AgentKind, AppState, InspectorMode, Task } from "../model.js";
 import { initialState } from "../model.js";
 
@@ -49,6 +50,8 @@ type Action =
   | { type: "mode/confirmKill" }
   | { type: "mode/merging" }
   | { type: "mode/killing" }
+  | { type: "mode/resumeAgentPicker"; slug: string }
+  | { type: "mode/resuming" }
   | { type: "mode/list" }
   | { type: "inspector/setMode"; mode: InspectorMode }
   | { type: "inspector/data"; slug: string; key: keyof ModeContent; value: any }
@@ -137,8 +140,21 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, mode: "merging" };
     case "mode/killing":
       return { ...s, mode: "killing" };
+    case "mode/resumeAgentPicker":
+      return {
+        ...s,
+        mode: "resumeAgentPicker",
+        pendingResumeSlug: a.slug,
+      };
+    case "mode/resuming":
+      return { ...s, mode: "resuming" };
     case "mode/list":
-      return { ...s, mode: "list", newTaskDescription: "" };
+      return {
+        ...s,
+        mode: "list",
+        newTaskDescription: "",
+        pendingResumeSlug: null,
+      };
     case "inspector/setMode":
       return { ...s, inspectorMode: a.mode };
     case "inspector/data":
@@ -304,6 +320,18 @@ export function App() {
       }
       if (state.mode === "spawning") return;
       if (state.mode === "merging" || state.mode === "killing") return;
+      if (state.mode === "resuming") return;
+
+      if (state.mode === "resumeAgentPicker") {
+        if (key.escape) dispatch({ type: "mode/list" });
+        if (input === "c" && state.pendingResumeSlug) {
+          void doResume(state.pendingResumeSlug, "claude");
+        }
+        if (input === "x" && state.pendingResumeSlug) {
+          void doResume(state.pendingResumeSlug, "codex");
+        }
+        return;
+      }
 
       if (state.mode === "confirmMerge") {
         if (input === "y" || input === "Y") {
@@ -384,17 +412,26 @@ export function App() {
         const slug = state.selectedSlug;
         if (!slug) return;
         if (!inSess) {
-          dispatch({ type: "flash", message: "Not in zellij — focus disabled." });
+          dispatch({
+            type: "flash",
+            message: "Not in zellij — focus/resume disabled.",
+          });
           return;
         }
-        focusPaneByName(slug).then((ok) => {
-          if (!ok) {
-            dispatch({
-              type: "flash",
-              message: `No live pane named "${slug}".`,
-            });
-          }
-        });
+        const task = state.tasks.find((t) => t.slug === slug);
+        // Live pane → focus. Otherwise → resume (start a new pane in the
+        // existing worktree with the agent's resume flag).
+        if (task && (task.state === "running" || task.state === "waiting")) {
+          focusPaneByName(slug).then((ok) => {
+            if (!ok) {
+              // Pane state changed between poll and keystroke — fall through
+              // to resume.
+              void enterResume(slug);
+            }
+          });
+        } else {
+          void enterResume(slug);
+        }
         return;
       }
 
@@ -478,8 +515,40 @@ export function App() {
     try {
       if (inSess) await closePaneByName(slug);
       await removeWorktree(slug);
+      // Drop the state-file entry so a future task with the same slug
+      // doesn't inherit the wrong agent kind.
+      recordRemove(slug).catch(() => {});
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Killed ${slug}` });
+    } catch (err) {
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function enterResume(slug: string) {
+    const recorded = await getAgent(slug);
+    if (recorded) {
+      void doResume(slug, recorded);
+      return;
+    }
+    // Unrecorded slug — happens for tasks created before lazyagent (or
+    // outside it). Ask the user which agent to relaunch.
+    dispatch({ type: "mode/resumeAgentPicker", slug });
+  }
+
+  async function doResume(slug: string, agent: AgentKind) {
+    dispatch({ type: "mode/resuming" });
+    try {
+      await resumeAgent({ slug, agent });
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "flash",
+        message: `Resumed ${slug} (${agent})`,
+      });
     } catch (err) {
       dispatch({ type: "mode/list" });
       dispatch({
@@ -532,10 +601,19 @@ export function App() {
             onCancel={() => dispatch({ type: "mode/list" })}
           />
         ) : state.mode === "newTaskAgent" ? (
-          <AgentPicker description={state.pendingDescription} />
+          <AgentPicker label={state.pendingDescription} intent="spawn" />
+        ) : state.mode === "resumeAgentPicker" ? (
+          <AgentPicker
+            label={state.pendingResumeSlug ?? "(unknown)"}
+            intent="resume"
+          />
         ) : state.mode === "spawning" ? (
           <Box paddingX={1}>
             <Text color="yellow">spawning…</Text>
+          </Box>
+        ) : state.mode === "resuming" ? (
+          <Box paddingX={1}>
+            <Text color="yellow">resuming…</Text>
           </Box>
         ) : (
           <Inspector
@@ -566,6 +644,7 @@ export function App() {
         error={state.error}
         taskCount={state.tasks.length}
         selected={state.selectedSlug}
+        selectedState={selectedTask?.state ?? null}
         inSession={inSess}
       />
     </Box>

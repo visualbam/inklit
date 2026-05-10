@@ -1,15 +1,29 @@
 import React from "react";
 import { Box, Text } from "ink";
+import type { TaskState } from "../model.js";
 
 interface Props {
   flash: string | null;
   error: string | null;
   taskCount: number;
   selected: string | null;
+  selectedState: TaskState | null;
   inSession: boolean;
 }
 
-export function StatusBar({ flash, error, taskCount, selected, inSession }: Props) {
+export function StatusBar({
+  flash,
+  error,
+  taskCount,
+  selected,
+  selectedState,
+  inSession,
+}: Props) {
+  // Contextual verb for `enter` based on what's under the cursor.
+  let enterVerb = "focus";
+  if (selectedState === "ready") enterVerb = "resume";
+  if (selectedState === null) enterVerb = "—";
+
   return (
     <Box paddingX={1}>
       {error ? (
@@ -23,7 +37,7 @@ export function StatusBar({ flash, error, taskCount, selected, inSession }: Prop
           {inSession ? "" : " · not in zellij (spawn disabled)"}
           {"  "}
           <Text>
-            j/k move · n new · enter focus · m merge · K kill · q quit
+            j/k move · n new · enter {enterVerb} · m merge · K kill · q quit
           </Text>
         </Text>
       )}
