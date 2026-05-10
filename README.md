@@ -235,6 +235,10 @@ them running in the background like Replit tasks.
       `$XDG_STATE_HOME/lazyagent/exits.json`).
 - [ ] Persist task lifecycle beyond the current process-derived projection
       (`draft`, `queued`, `applying`, `archived`, `cancelled`).
+- [ ] Add a Replit-style contextual composer: keep `n` for manual task creation,
+      keep power-user shortcuts, and add a single opt-in input (likely `space`)
+      that can switch between new task, message selected agent, and suggested
+      follow-up without making the board an always-active chat box.
 - [ ] Validate behavior when `wt` schema changes; the parser is permissive but
       untyped fields could regress silently.
 
