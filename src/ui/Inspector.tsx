@@ -11,6 +11,7 @@ import {
   formatStateLabel,
 } from "./icons.js";
 import { UI } from "./theme.js";
+import { suggestedFollowUps } from "./followUps.js";
 
 interface Props {
   task: Task | null;
@@ -184,6 +185,19 @@ function TaskOverview({
     ],
     ["Worktree", task.path],
   ];
+  const followUps = suggestedFollowUps(task);
+  if (followUps[0]) {
+    rows.push([
+      "Next task",
+      `T/1: ${followUps[0].title} - ${followUps[0].detail}`,
+    ]);
+  }
+  if (followUps[1]) {
+    rows.push([
+      "Task 2",
+      `2: ${followUps[1].title} - ${followUps[1].detail}`,
+    ]);
+  }
   const { visible, above, below } = windowWithMarkers(rows, maxLines, offset);
   return (
     <Box flexDirection="column">
@@ -193,7 +207,7 @@ function TaskOverview({
         </Box>
       ) : null}
       {visible.map(([label, value]) => (
-        <Box key={label}>
+        <Box key={`${label}:${value}`}>
           <Text color={UI.accent}>{padRight(label, 10)}</Text>
           <Text>{truncate(value, width - 12)}</Text>
         </Box>

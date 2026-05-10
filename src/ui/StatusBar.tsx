@@ -4,6 +4,7 @@ import type { Task } from "../model.js";
 import { lifecycleForTask } from "../model.js";
 import { LIFECYCLE_LABEL, formatStateLabel } from "./icons.js";
 import { UI } from "./theme.js";
+import { suggestedFollowUps } from "./followUps.js";
 
 interface Props {
   flash: string | null;
@@ -35,6 +36,8 @@ export function StatusBar({
     ? ` · filter ${visibleTaskCount}/${taskCount}`
     : "";
   const next = nextAction(selectedTask, inSession);
+  const followUpHint =
+    suggestedFollowUps(selectedTask).length > 0 ? " · T follow-up" : "";
 
   return (
     <Box paddingX={1}>
@@ -49,7 +52,7 @@ export function StatusBar({
             {truncate(
               ` · ${taskCount} task${taskCount === 1 ? "" : "s"}${selectedSummary}${filterSummary}${
                 inSession ? "" : " · not in zellij"
-              } · j/k move · / filter · r refresh · ? help`,
+              } · j/k move${followUpHint} · / filter · r refresh · ? help`,
               Math.max(0, width - next.length)
             )}
           </Text>
@@ -66,8 +69,8 @@ function nextAction(task: Task | null, inSession: boolean): string {
     return inSession ? "Next: watch transcript with a" : "Next: inspect task";
   }
   if (task.state === "idle") return "Next: inspect idle agent with a";
-  if (task.state === "ready") return "Next: review diff, then apply with m";
-  if (task.state === "merged") return "Next: applied task will fade out";
+  if (task.state === "ready") return "Next: review diff or T follow-up";
+  if (task.state === "merged") return "Next: T follow-up or let it fade out";
   return "Next: inspect task";
 }
 

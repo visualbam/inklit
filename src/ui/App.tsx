@@ -11,6 +11,7 @@ import { SendInputPrompt } from "./SendInputPrompt.js";
 import { FilterPrompt } from "./FilterPrompt.js";
 import { HelpOverlay } from "./HelpOverlay.js";
 import { UI } from "./theme.js";
+import { suggestedFollowUps } from "./followUps.js";
 import {
   listProject,
   gitDiff,
@@ -200,11 +201,13 @@ function keepVisibleSelection(
 function totalLinesFor(s: RenderState): number {
   const slug = s.selectedSlug;
   if (!slug) return 0;
+  if (s.inspectorMode === "task") {
+    const task = s.tasks.find((t) => t.slug === slug) ?? null;
+    return 7 + suggestedFollowUps(task).length;
+  }
   const c = s.content.get(slug);
   if (!c) return 0;
   switch (s.inspectorMode) {
-    case "task":
-      return 7;
     case "diff":
       return c.diff ? c.diff.split("\n").length : 0;
     case "log":
@@ -1135,6 +1138,10 @@ export function App() {
         dispatch({ type: "mode/newTaskDescription" });
         return;
       }
+      if (input === "T" || input === "1" || input === "2") {
+        startFollowUp(input === "2" ? 1 : 0);
+        return;
+      }
       if (key.return) {
         const slug = state.selectedSlug;
         if (!slug) return;
@@ -1252,6 +1259,26 @@ export function App() {
   const visibleTasks = visibleTasksFor(state.tasks, state.filterQuery);
   const selectedTask =
     state.tasks.find((t) => t.slug === state.selectedSlug) ?? null;
+
+  function startFollowUp(index: number) {
+    const task = state.tasks.find((t) => t.slug === state.selectedSlug) ?? null;
+    const followUp = suggestedFollowUps(task)[index];
+    if (!task || !followUp) {
+      dispatch({
+        type: "flash",
+        message: "No suggested next task for this selection.",
+      });
+      return;
+    }
+    if (!inSess) {
+      dispatch({
+        type: "flash",
+        message: "Not in zellij — launch lazyagent inside a zellij session.",
+      });
+      return;
+    }
+    dispatch({ type: "mode/newTaskAgent", description: followUp.prompt });
+  }
 
   /**
    * Pick any live agent pane as the stack anchor. Excludes a slug we're

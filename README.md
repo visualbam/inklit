@@ -71,6 +71,8 @@ Movement is Vim/Helix-flavored.
 | `gg`     | jump inspector to top                                      |
 | `G`      | jump inspector to bottom (re-anchors agent transcript to live tail) |
 | `n`      | new task — prompts for description, then agent (`c`/`x`)  |
+| `T` / `1` | start the top suggested next task for the selected task  |
+| `2`      | start the second suggested next task when shown            |
 | `enter`  | running/waiting → focus pane; ready → resume agent         |
 | `i`      | send a one-line message into the selected agent's pane (Enter sends + presses return; esc cancels) |
 | `q` / `Ctrl-C` | exit the dashboard only; live agents keep running in zellij |
@@ -99,6 +101,9 @@ separate concepts:
   `no pane`.
 - **review** is a compact readiness summary: `3f 2c 1u` means three changed
   files, two commits ahead, one untracked file.
+- **suggested next tasks** appear in the task inspector for `ready` and
+  recently applied `done` rows. Press `T`/`1` or `2` to launch one through the
+  normal agent picker.
 
 ### Pane Icons
 
@@ -146,6 +151,7 @@ src/
     NewTaskPrompt.tsx  description prompt + agent picker
     FilterPrompt.tsx task board filter prompt
     HelpOverlay.tsx keybind reference
+    followUps.ts    deterministic suggested next tasks
     theme.ts       terminal-safe ANSI color tokens
     icons.ts       state → icon/color/label
 ```
@@ -190,7 +196,8 @@ starts clean.
 The bottom half of the screen is the inspector. Toggle with `t`/`f`/`d`/`l`/`a`:
 
 - **`t` task** — Replit-style task view: lifecycle, pane state, next action,
-  checkpoint, dirty status, and pointers to review/thread controls.
+  checkpoint, dirty status, suggested next tasks, and pointers to review/thread
+  controls.
 - **`f` files** — `git diff --name-status --find-renames <merge-base>` parsed
   into a list of all tracked task changes vs the main version, plus untracked
   files from `git ls-files --others --exclude-standard`. Rows include best-effort

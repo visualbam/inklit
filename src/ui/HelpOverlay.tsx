@@ -36,6 +36,8 @@ const SECTIONS: Section[] = [
     title: "Actions",
     rows: [
       ["n", "new agent task — prompts for description, then agent (c/x)"],
+      ["T / 1", "start the top suggested next task"],
+      ["2", "start the second suggested next task when shown"],
       ["enter", "focus pane (live) · resume agent (ready)"],
       ["i", "send a one-line message to the selected agent"],
       ["m", "apply selected task to main (review then confirm)"],
