@@ -105,6 +105,28 @@ function ourPaneId(): string | null {
   return /^\d+$/.test(raw) ? `terminal_${raw}` : raw;
 }
 
+/**
+ * Rename our own pane to `name`. Tries the zellij action first (requires the
+ * pane to be focused, which it normally is at startup); also emits the OSC 0
+ * title sequence so the rename survives a zellij session reload.
+ */
+export async function renameOwnPane(name: string): Promise<void> {
+  if (!inSession()) return;
+  // OSC 0: set terminal / pane title — zellij intercepts this.
+  process.stdout.write(`\x1b]0;${name}\x07`);
+  // Belt-and-suspenders: call the rename-pane action on our pane id.
+  const id = ourPaneId();
+  if (!id) return;
+  try {
+    await execa("zellij", ["action", "rename-pane", name, "-p", id], {
+      reject: true,
+      timeout: 1000,
+    });
+  } catch {
+    // rename-pane without --pane-id support (older zellij) — OSC already fired.
+  }
+}
+
 /** Refocus inklit's own pane after actions that had to focus another pane. */
 export async function focusOwnPane(): Promise<boolean> {
   const home = ourPaneId();

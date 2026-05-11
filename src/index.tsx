@@ -2,6 +2,7 @@
 import React from "react";
 import { render } from "ink";
 import { App } from "./ui/App.js";
+import { renameOwnPane } from "./zellij.js";
 
 const args = process.argv.slice(2);
 if (args.includes("-v") || args.includes("--version")) {
@@ -26,6 +27,7 @@ if (args.includes("-h") || args.includes("--help")) {
   process.exit(0);
 }
 
+renameOwnPane("inklit");
 const { waitUntilExit } = render(<App />);
 waitUntilExit().then(
   () => process.exit(0),
