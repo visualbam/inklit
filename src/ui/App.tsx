@@ -612,7 +612,7 @@ function screenTail(text: string): string {
  * enough to catch real stalls without flapping during normal pauses
  * (file reads, model thinking) which usually resolve in <10s.
  */
-const IDLE_AFTER_MS = 30_000;
+const IDLE_AFTER_MS = 15_000;
 
 export function App() {
   const { exit } = useApp();
@@ -827,17 +827,19 @@ export function App() {
         // Transition-based desktop notifications. Only fire when we've seen
         // the slug before (so freshly-loaded tasks don't pop on startup) and
         // the state actually changed. Keep the trigger list intentionally
-        // narrow: waiting/ready/failed are the states that justify pulling the
-        // user back from their editor.
+        // narrow: waiting/idle/ready/failed are the states that justify pulling
+        // the user back from their editor.
         for (const t of finalTasks) {
           const prev = prevStatesRef.current.get(t.slug);
           if (!prev || prev === t.state) continue;
           if (t.state === "waiting") {
-            notify("lazyagent", `${t.slug} is waiting for input`);
+            notify("inklit", `${t.slug} is waiting for input`);
+          } else if (t.state === "idle") {
+            notify("inklit", `${t.slug} stopped — review when ready`);
           } else if (t.state === "ready") {
-            notify("lazyagent", `${t.slug} is ready for review`, { sound: "" });
+            notify("inklit", `${t.slug} is ready for review`, { sound: "" });
           } else if (t.state === "failed") {
-            notify("lazyagent", `${t.slug} failed`, { sound: "Basso" });
+            notify("inklit", `${t.slug} failed`, { sound: "Basso" });
           }
         }
         const nextStates = new Map<string, TaskState>();
@@ -1402,7 +1404,7 @@ export function App() {
     if (!inSess) {
       dispatch({
         type: "flash",
-        message: "Not in zellij — launch lazyagent inside a zellij session.",
+        message: "Not in zellij — launch inklit inside a zellij session.",
       });
       return;
     }
@@ -1436,7 +1438,7 @@ export function App() {
     if (!inSess) {
       dispatch({
         type: "flash",
-        message: "Not in zellij - launch lazyagent inside a zellij session.",
+        message: "Not in zellij - launch inklit inside a zellij session.",
       });
       return;
     }
@@ -1615,9 +1617,14 @@ export function App() {
       dispatch({ type: "flash", message: `Applied ${slug} → main` });
     } catch (err) {
       dispatch({ type: "mode/list" });
+      const base = err instanceof Error ? err.message : String(err);
+      const firstStderrLine = (err as { stderr?: string }).stderr
+        ?.split("\n")
+        .map((l) => l.replace(/^[✗✓◎→↳\s]+/, "").trim())
+        .find((l) => l.length > 0);
       dispatch({
         type: "error",
-        message: err instanceof Error ? err.message : String(err),
+        message: firstStderrLine ? `${base}: ${firstStderrLine}` : base,
       });
     }
   }
@@ -1675,7 +1682,7 @@ export function App() {
     // (title rewrites, stale paneIds) and we'd rather over-close than
     // leak panes when the user explicitly asks to close all. The union of:
     //   - in-memory task.paneId for live tasks
-    //   - state-file recorded paneIds (catches panes lazyagent spawned
+    //   - state-file recorded paneIds (catches panes inklit spawned
     //     even if the poll loop has lost track of them)
     //   - zellij panes whose cwd matches any current worktree path
     //     (catches panes whose recorded paneId is stale but the agent
@@ -1800,7 +1807,7 @@ export function App() {
       void doResume(slug, recorded);
       return;
     }
-    // Unrecorded slug — happens for tasks created before lazyagent (or
+    // Unrecorded slug — happens for tasks created before inklit (or
     // outside it). Ask the user which agent to relaunch.
     dispatch({ type: "mode/resumeAgentPicker", slug });
   }
@@ -1878,7 +1885,7 @@ export function App() {
       <Box flexDirection="column" height={rows}>
         <Box paddingX={1}>
           <Text bold color={UI.accent}>
-            lazyagent
+            inklit
           </Text>
           <Text dimColor> — parallel agents in worktrees</Text>
         </Box>

@@ -80,7 +80,7 @@ export function HelpOverlay() {
     >
       <Box marginBottom={1}>
         <Text bold color={UI.accent}>
-          lazyagent — keybinds
+          inklit — keybinds
         </Text>
       </Box>
       {SECTIONS.map((s, i) => (

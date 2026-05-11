@@ -1,4 +1,4 @@
-# lazyagent
+# inklit
 
 A terminal dashboard for managing parallel AI coding agents (Claude Code, Codex
 CLI) that each run in their own git worktree. It sits in a Zellij pane next to
@@ -6,7 +6,7 @@ your editor and the agent panes themselves — think "Replit-style task list,
 scoped to git worktrees."
 
 It is a thin presentation layer over [worktrunk](https://worktrunk.dev) (the
-`wt` CLI). Worktrunk handles all worktree/branch operations. lazyagent handles
+`wt` CLI). Worktrunk handles all worktree/branch operations. inklit handles
 the dashboard view and Zellij integration.
 
 In Replit terms, the local repo checkout is the **main version**. Agent tasks
@@ -27,17 +27,17 @@ bunch of features are intentionally stubbed — see the TODO list below.
 | `zellij`    | 0.44.2         |
 | `claude` or `codex` CLI | any (the agent CLI you spawn) |
 
-You can run lazyagent outside zellij — the list will render read-only. Spawning
+You can run inklit outside zellij — the list will render read-only. Spawning
 new tasks and focusing panes both require an active zellij session.
 
 ## Install
 
 ```bash
 git clone <this-repo>
-cd lazyagent
+cd inklit
 npm install
 npm run build
-npm link        # exposes `lazyagent` on your PATH
+npm link        # exposes `inklit` on your PATH
 ```
 
 Or run from source without installing globally:
@@ -51,7 +51,7 @@ npm run dev
 Open a zellij session, drop into a git repo, and:
 
 ```bash
-lazyagent
+inklit
 ```
 
 ### Keybinds
@@ -112,7 +112,7 @@ separate concepts:
 
 The board is grouped by urgency (`Waiting`, `Running`, `Idle`, `Ready`,
 `Failed`, `Done`, then archived rows when visible). Press `v` to switch between
-the detailed table and compact two-line task cards; lazyagent remembers that
+the detailed table and compact two-line task cards; inklit remembers that
 layout across restarts. When the board outgrows the pane, it keeps the selected
 task inside the visible window and shows hidden-task markers above or below
 instead of letting the inspector cover task rows.
@@ -134,14 +134,14 @@ recently applied `done` rows, then archived/cancelled rows when visible.
 ### Notifications
 
 When a task transitions into `⊙ waiting` (the agent is asking you something),
-`ready` (available for review), or `failed`, lazyagent fires a macOS
+`ready` (available for review), or `failed`, inklit fires a macOS
 Notification Center popup so you can stay focused in your editor and only come
 back when there's something to answer or review. Best-effort and silent on
 Linux/Windows for now.
 
 ## Architecture
 
-Single binary, no daemon. State lives in git + worktrunk; lazyagent does not
+Single binary, no daemon. State lives in git + worktrunk; inklit does not
 duplicate it. The TUI polls `wt list --format json` and
 `zellij action list-panes --json` for cheap project status, then samples zellij
 pane screens on a separate throttled loop so active agents do not stall input.
@@ -189,7 +189,7 @@ When you press `n`:
 ### Resume
 
 Closing an agent's zellij pane (or letting it exit) leaves the task in
-`✓ ready`. Press `enter` on a `ready` task and lazyagent will spawn a fresh
+`✓ ready`. Press `enter` on a `ready` task and inklit will spawn a fresh
 pane in the existing worktree, running the agent's resume incantation:
 
 - **claude** → `claude --continue` (most recent session in cwd)
@@ -200,8 +200,8 @@ any uncommitted work is still there. The status bar verb on `enter` flips
 between `focus` (live pane) and `resume` (no pane) so you know which it'll do.
 
 The agent kind is recorded at spawn time in
-`$XDG_STATE_HOME/lazyagent/tasks.json` (default `~/.local/state/...`). Tasks
-created before lazyagent existed — or via `wt switch` directly — won't have
+`$XDG_STATE_HOME/inklit/tasks.json` (default `~/.local/state/...`). Tasks
+created before inklit existed — or via `wt switch` directly — won't have
 an entry, so resume opens the agent picker and remembers your choice for
 next time. The same file stores lifecycle overrides for archived rows, recently
 applied rows, and UI preferences like detailed/compact board layout, so those
@@ -254,7 +254,7 @@ rows and press `A` again to restore one.
 ## Limitations & TODOs (phase 2)
 
 - [ ] `failed` state detection (track pane exit codes in
-      `$XDG_STATE_HOME/lazyagent/exits.json`).
+      `$XDG_STATE_HOME/inklit/exits.json`).
 - [ ] Add a Replit-style contextual composer: keep `n` for manual task creation,
       keep power-user shortcuts, and add a single opt-in input (likely `space`)
       that can switch between new task, message selected agent, and suggested
@@ -265,11 +265,11 @@ rows and press `A` again to restore one.
 ## Demo
 
 `scripts/demo.sh` creates two dummy worktrees in the current git repo so
-lazyagent has something to render on first launch:
+inklit has something to render on first launch:
 
 ```bash
 ./scripts/demo.sh
-lazyagent
+inklit
 # tear down: wt remove demo-one demo-two -D
 ```
 

@@ -6,16 +6,16 @@ import { App } from "./ui/App.js";
 const args = process.argv.slice(2);
 if (args.includes("-v") || args.includes("--version")) {
   // eslint-disable-next-line no-console
-  console.log("lazyagent 0.0.1");
+  console.log("inklit 0.0.1");
   process.exit(0);
 }
 if (args.includes("-h") || args.includes("--help")) {
   // eslint-disable-next-line no-console
   console.log(
     [
-      "lazyagent — TUI for parallel AI coding agents in git worktrees.",
+      "inklit — TUI for parallel AI coding agents in git worktrees.",
       "",
-      "Usage:  lazyagent",
+      "Usage:  inklit",
       "",
       "Run inside a zellij session for full functionality (focus + spawn).",
       "Outside zellij, the list still renders read-only.",

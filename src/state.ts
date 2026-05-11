@@ -50,7 +50,7 @@ function statePath(): string {
   // Per XDG Base Directory: $XDG_STATE_HOME defaults to $HOME/.local/state.
   const base =
     process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
-  return join(base, "lazyagent", "tasks.json");
+  return join(base, "inklit", "tasks.json");
 }
 
 async function readFile(): Promise<StateFile> {
@@ -62,12 +62,12 @@ async function readFile(): Promise<StateFile> {
     }
   } catch (err) {
     // Missing file or invalid JSON → treat as fresh state. We never throw
-    // from here because state is best-effort: lazyagent must work the first
+    // from here because state is best-effort: inklit must work the first
     // time you run it before the file exists.
     if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
       // Corrupt file — log to stderr but proceed.
       // eslint-disable-next-line no-console
-      console.error(`lazyagent: state file unreadable, starting fresh: ${err}`);
+      console.error(`inklit: state file unreadable, starting fresh: ${err}`);
     }
   }
   return { version: 1, tasks: {} };

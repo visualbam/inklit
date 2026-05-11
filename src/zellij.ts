@@ -98,14 +98,14 @@ function paneIdArg(p: ZellijPane): string | null {
   return null;
 }
 
-/** Our own pane id (lazyagent's host pane), if discoverable. */
+/** Our own pane id (inklit's host pane), if discoverable. */
 function ourPaneId(): string | null {
   const raw = process.env.ZELLIJ_PANE_ID;
   if (!raw) return null;
   return /^\d+$/.test(raw) ? `terminal_${raw}` : raw;
 }
 
-/** Refocus lazyagent's own pane after actions that had to focus another pane. */
+/** Refocus inklit's own pane after actions that had to focus another pane. */
 export async function focusOwnPane(): Promise<boolean> {
   const home = ourPaneId();
   if (!home) return false;
@@ -152,7 +152,7 @@ export async function closePaneById(id: string): Promise<boolean> {
  * recently created wins (highest id) so successive spawns chain onto the
  * latest stack member.
  *
- * Returns null when no anchor exists (first agent: lazyagent is alone in the
+ * Returns null when no anchor exists (first agent: inklit is alone in the
  * tab) or zellij isn't reachable.
  */
 async function discoverStackAnchor(): Promise<string | null> {
@@ -237,7 +237,7 @@ export async function closePaneByName(name: string): Promise<boolean> {
  * pane is gone or zellij rejects the write.
  *
  * Uses `--pane-id` (zellij ≥0.42) so we never have to focus the target pane —
- * the user's lazyagent view stays put. We re-resolve the pane id by name
+ * the user's inklit view stays put. We re-resolve the pane id by name
  * right before writing so a pane that died between the last poll and this
  * keystroke fails closed instead of leaking text into the focused pane.
  *
@@ -301,13 +301,13 @@ export async function sendKeysToPaneId(
  * Spawn a new named pane running `command`. Returns the created pane id, or
  * null when zellij doesn't echo one (rare).
  *
- * Layout policy: lazyagent (left) stays out of the agent stack.
+ * Layout policy: inklit (left) stays out of the agent stack.
  *   - With `anchorPaneId` (an existing agent pane): focus it, then `--stacked`
  *     adds the new pane to that pane's stack. zellij will create the stack on
  *     first sibling and append to it after.
  *   - Without an anchor (no live agent panes yet): split right with `-d right`
- *     so the first agent lives next to lazyagent, not on top of it.
- * After spawning we refocus lazyagent's pane so the user can keep navigating.
+ *     so the first agent lives next to inklit, not on top of it.
+ * After spawning we refocus inklit's pane so the user can keep navigating.
  */
 export async function spawnPane(opts: {
   name: string;
@@ -319,13 +319,13 @@ export async function spawnPane(opts: {
 }): Promise<string | null> {
   if (!inSession()) {
     throw new ZellijError(
-      "Not in a zellij session. Launch lazyagent inside zellij so it can spawn panes."
+      "Not in a zellij session. Launch inklit inside zellij so it can spawn panes."
     );
   }
 
   const home = ourPaneId();
   // Caller-provided anchor wins; otherwise scan zellij for any sibling pane
-  // in our tab. This keeps the stacking working even after lazyagent restarts
+  // in our tab. This keeps the stacking working even after inklit restarts
   // when no React-side paneId tracking is available.
   const anchor = opts.anchorPaneId ?? (await discoverStackAnchor());
   const useStack = anchor ? await focusPaneId(anchor) : false;
@@ -361,7 +361,7 @@ export async function spawnPane(opts: {
       typeof e.stderr === "string" ? e.stderr : undefined
     );
   } finally {
-    // Refocus lazyagent so the user keeps interacting with the list.
+    // Refocus inklit so the user keeps interacting with the list.
     if (home) await focusPaneId(home);
   }
 }

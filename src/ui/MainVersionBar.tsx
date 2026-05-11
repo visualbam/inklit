@@ -22,7 +22,7 @@ export function MainVersionBar({
   if (!mainVersion) {
     return (
       <Box paddingX={1}>
-        <Text bold color={UI.accent}>lazyagent</Text>
+        <Text bold color={UI.accent}>inklit</Text>
         <Text dimColor> · main version loading…</Text>
       </Box>
     );
@@ -31,7 +31,7 @@ export function MainVersionBar({
   if (mainVersion.error) {
     return (
       <Box paddingX={1}>
-        <Text bold color={UI.accent}>lazyagent</Text>
+        <Text bold color={UI.accent}>inklit</Text>
         <Text dimColor>
           {" "}· main version unavailable ·{" "}
           {truncate(mainVersion.error, Math.max(12, width - 38))}
@@ -50,11 +50,11 @@ export function MainVersionBar({
   } ${mainVersion.dirty ? "dirty" : "clean"} · active ${counts.active} ready ${
     counts.ready
   } done ${counts.done}${filter} · ${path}`;
-  const maxSummary = Math.max(12, width - "lazyagent ".length - 2);
+  const maxSummary = Math.max(12, width - "inklit ".length - 2);
 
   return (
     <Box paddingX={1}>
-      <Text bold color={UI.accent}>lazyagent</Text>
+      <Text bold color={UI.accent}>inklit</Text>
       <Text dimColor>{truncate(summary, maxSummary)}</Text>
     </Box>
   );

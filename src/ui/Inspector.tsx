@@ -234,7 +234,7 @@ function TaskTimeline({ task }: { task: Task }) {
   const active =
     lifecycle === "done" || task.state === "merged"
       ? 3
-      : lifecycle === "ready" || task.state === "ready"
+      : lifecycle === "ready" || task.state === "ready" || task.state === "idle"
         ? 2
         : lifecycle === "archived" || lifecycle === "cancelled"
           ? 4
