@@ -621,11 +621,17 @@ function screenTail(text: string): string {
  */
 const IDLE_AFTER_MS = 15_000;
 
-export function App() {
+interface AppProps {
+  /** Branch/ref used for review, sync, and apply operations. */
+  mainBranch?: string;
+}
+
+export function App({ mainBranch = "main" }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
   const rows = stdout?.rows ?? 24;
+  const targetBranch = mainBranch.trim() || "main";
 
   const [state, dispatch] = useReducer(reducer, initial);
   const inSess = useMemo(() => inSession(), []);
@@ -1032,7 +1038,7 @@ export function App() {
       }
 
       for (const task of toProbe) {
-        const stats = await gitReviewStats(task.path);
+        const stats = await gitReviewStats(task.path, targetBranch);
         if (cancelled) return;
         reviewStatsRef.current.set(task.slug, {
           stats,
@@ -1049,7 +1055,7 @@ export function App() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [targetBranch]);
 
   // If the user switches to an already-sampled agent pane, show the cached tail
   // immediately instead of waiting for the next selected-pane sampler tick.
@@ -1100,15 +1106,15 @@ export function App() {
     (async () => {
       try {
         if (mode === "diff") {
-          const value = await gitDiff(task.path);
+          const value = await gitDiff(task.path, targetBranch);
           if (!cancelled)
             dispatch({ type: "inspector/data", slug, key: "diff", value });
         } else if (mode === "log") {
-          const value = await gitLog(task.path);
+          const value = await gitLog(task.path, targetBranch);
           if (!cancelled)
             dispatch({ type: "inspector/data", slug, key: "log", value });
         } else if (mode === "files") {
-          const value = await gitFiles(task.path);
+          const value = await gitFiles(task.path, targetBranch);
           if (!cancelled)
             dispatch({ type: "inspector/data", slug, key: "files", value });
         }
@@ -1119,7 +1125,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [state.selectedSlug, state.inspectorMode, state.tasks]);
+  }, [state.selectedSlug, state.inspectorMode, state.tasks, targetBranch]);
 
   // Flash auto-clear.
   useEffect(() => {
@@ -1615,6 +1621,7 @@ export function App() {
       const res = await spawnAgent({
         description,
         agent,
+        base: targetBranch === "main" ? undefined : targetBranch,
         anchorPaneId: pickStackAnchor(),
       });
       dispatch({ type: "mode/list" });
@@ -1633,7 +1640,7 @@ export function App() {
     if (!task) return;
     dispatch({ type: "mode/merging" });
     try {
-      await mergeToMain(task.path);
+      await mergeToMain(task.path, targetBranch);
       await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => {});
       const mergedTask: Task = {
         ...task,
@@ -1651,7 +1658,7 @@ export function App() {
       reviewStatsRef.current.delete(slug);
       dispatch({ type: "task/merged", slug, task: mergedTask });
       dispatch({ type: "mode/list" });
-      dispatch({ type: "flash", message: `Applied ${slug} → main` });
+      dispatch({ type: "flash", message: `Applied ${slug} → ${targetBranch}` });
     } catch (err) {
       dispatch({ type: "mode/list" });
       const base = err instanceof Error ? err.message : String(err);
@@ -1671,9 +1678,9 @@ export function App() {
     if (!task) return;
     dispatch({ type: "mode/syncing" });
     try {
-      await syncFromMain(task.path);
+      await syncFromMain(task.path, targetBranch);
       dispatch({ type: "mode/list" });
-      dispatch({ type: "flash", message: `Synced main → ${slug}` });
+      dispatch({ type: "flash", message: `Synced ${targetBranch} → ${slug}` });
     } catch (err) {
       dispatch({ type: "mode/list" });
       const base = err instanceof Error ? err.message : String(err);
@@ -1950,7 +1957,7 @@ export function App() {
           <Text dimColor> — parallel agents in worktrees</Text>
         </Box>
         <Box flexGrow={1} flexDirection="column">
-          <HelpOverlay />
+          <HelpOverlay targetBranch={targetBranch} />
         </Box>
         <StatusBar
           flash={state.flash}
@@ -1972,6 +1979,7 @@ export function App() {
     <Box flexDirection="column" height={rows}>
       <MainVersionBar
         mainVersion={state.mainVersion}
+        targetBranch={targetBranch}
         tasks={state.tasks}
         visibleTaskCount={visibleTasks.length}
         filterQuery={state.filterQuery}
@@ -2028,6 +2036,7 @@ export function App() {
           <CommandPalette
             selectedTask={selectedTask}
             density={state.listDensity}
+            targetBranch={targetBranch}
             showArchived={state.showArchived}
             inSession={inSess}
             height={inspectorHeight}
@@ -2037,6 +2046,7 @@ export function App() {
           <Inspector
             task={selectedTask}
             mode={state.inspectorMode}
+            targetBranch={targetBranch}
             diff={content.diff}
             log={content.log}
             agent={content.agent}
@@ -2071,6 +2081,7 @@ export function App() {
                 state.mode === "killing" ||
                 state.mode === "closingAll"
               }
+              targetBranch={targetBranch}
             />
           ) : showSendInput ? (
             <SendInputPrompt

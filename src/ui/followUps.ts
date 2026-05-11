@@ -19,7 +19,7 @@ function readyFollowUps(task: Task): SuggestedFollowUp[] {
     {
       title: "Harden before apply",
       detail: `${scope}: run focused checks and fix regressions.`,
-      prompt: `Review and harden ${task.slug} before apply: inspect the diff against main, run the relevant checks for ${scope}, and fix any regressions.`,
+      prompt: `Review and harden ${task.slug} before apply: inspect the diff against the target branch, run the relevant checks for ${scope}, and fix any regressions.`,
     },
   ];
 
@@ -46,9 +46,9 @@ function readyFollowUps(task: Task): SuggestedFollowUp[] {
 function mergedFollowUps(task: Task): SuggestedFollowUp[] {
   return [
     {
-      title: "Verify on main",
-      detail: "Run main-checkout checks for the applied task.",
-      prompt: `Verify ${task.slug} on main: run the relevant checks after the applied change and fix any fallout.`,
+      title: "Verify applied work",
+      detail: "Run target-checkout checks for the applied task.",
+      prompt: `Verify ${task.slug} on the target branch: run the relevant checks after the applied change and fix any fallout.`,
     },
     {
       title: "Polish follow-through",

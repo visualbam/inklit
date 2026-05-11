@@ -17,6 +17,7 @@ import { reviewSentence, reviewSummary } from "./review.js";
 interface Props {
   task: Task | null;
   mode: InspectorMode;
+  targetBranch: string;
   /** Mode-specific content. Strings for diff/log/agent; structured for files. */
   diff: string;
   log: string;
@@ -32,6 +33,7 @@ interface Props {
 export function Inspector({
   task,
   mode,
+  targetBranch,
   diff,
   log,
   agent,
@@ -45,8 +47,8 @@ export function Inspector({
   const maxLines = Math.max(3, height - 6);
   const title = task ? task.slug : "(no selection)";
   const header = task
-    ? `${title} · ${modeLabel(mode)} · ${task.shortSha || "no sha"}`
-    : `${title} · ${modeLabel(mode)}`;
+    ? `${title} · ${modeLabel(mode, targetBranch)} · ${task.shortSha || "no sha"}`
+    : `${title} · ${modeLabel(mode, targetBranch)}`;
   const contentWidth = Math.max(10, width - 4);
 
   return (
@@ -62,7 +64,13 @@ export function Inspector({
           {truncate(header, width - 2)}
         </Text>
       </Box>
-      {task ? <TaskStatusStrip task={task} width={width} /> : null}
+      {task ? (
+        <TaskStatusStrip
+          task={task}
+          targetBranch={targetBranch}
+          width={width}
+        />
+      ) : null}
       <ModeTabs active={mode} />
       <Box marginTop={1} flexDirection="column" flexGrow={1}>
         {!task ? (
@@ -72,6 +80,7 @@ export function Inspector({
         ) : mode === "task" ? (
           <TaskOverview
             task={task}
+            targetBranch={targetBranch}
             maxLines={maxLines}
             offset={offset}
             width={width}
@@ -86,6 +95,7 @@ export function Inspector({
         ) : mode === "files" ? (
           <FilesView
             entries={files}
+            targetBranch={targetBranch}
             maxLines={maxLines}
             offset={offset}
             width={contentWidth}
@@ -136,12 +146,20 @@ function ModeTabs({ active }: { active: InspectorMode }) {
   );
 }
 
-function TaskStatusStrip({ task, width }: { task: Task; width: number }) {
+function TaskStatusStrip({
+  task,
+  targetBranch,
+  width,
+}: {
+  task: Task;
+  targetBranch: string;
+  width: number;
+}) {
   const lifecycle = lifecycleForTask(task);
   const label = LIFECYCLE_LABEL[lifecycle];
   const line = `${label} task · ${paneSummary(task)} · ${
     task.dirty ? "changes pending review" : "clean worktree"
-  } · ${nextAction(task)}`;
+  } · ${nextAction(task, targetBranch)}`;
   return (
     <Box>
       <Text color={LIFECYCLE_COLOR[lifecycle]}>{label}</Text>
@@ -155,11 +173,13 @@ function TaskStatusStrip({ task, width }: { task: Task; width: number }) {
 
 function TaskOverview({
   task,
+  targetBranch,
   maxLines,
   offset,
   width,
 }: {
   task: Task;
+  targetBranch: string;
   maxLines: number;
   offset: number;
   width: number;
@@ -169,10 +189,13 @@ function TaskOverview({
       "Status",
       `${LIFECYCLE_LABEL[lifecycleForTask(task)]} task, ${paneSummary(task)}`,
     ],
-    ["Next", nextAction(task)],
+    ["Next", nextAction(task, targetBranch)],
     ["Readiness", reviewSentence(task)],
     ["Signals", reviewSummary(task)],
-    ["Controls", "Open files/diff/log, then apply with m or discard with X."],
+    [
+      "Controls",
+      `Open files/diff/log, then apply to ${targetBranch} with m or discard with X.`,
+    ],
     [
       "Thread",
       task.paneId
@@ -271,7 +294,7 @@ function paneSummary(task: Task): string {
   return `${formatStateLabel(task)} pane`;
 }
 
-function nextAction(task: Task): string {
+function nextAction(task: Task, targetBranch: string): string {
   if (task.state === "permission") {
     return "Agent needs a permission change — enter the pane to approve or deny.";
   }
@@ -285,9 +308,9 @@ function nextAction(task: Task): string {
     return "Check the transcript; the pane has not changed recently.";
   }
   if (task.state === "ready") {
-    return "Review the diff, apply to main with m, or enter to resume.";
+    return `Review the diff, apply to ${targetBranch} with m, or enter to resume.`;
   }
-  if (task.state === "merged") return "Task has been applied to main.";
+  if (task.state === "merged") return `Task has been applied to ${targetBranch}.`;
   return "Inspect the task and decide whether to resume or discard.";
 }
 
@@ -328,16 +351,16 @@ function PlainText({
   );
 }
 
-function modeLabel(mode: InspectorMode): string {
+function modeLabel(mode: InspectorMode, targetBranch: string): string {
   switch (mode) {
     case "task":
       return "task view";
     case "files":
-      return "files vs main version";
+      return `files vs ${targetBranch}`;
     case "diff":
-      return "final patch vs main version";
+      return `final patch vs ${targetBranch}`;
     case "log":
-      return "log (commits ahead of main version)";
+      return `log (commits ahead of ${targetBranch})`;
     case "agent":
       return "agent transcript (live)";
   }

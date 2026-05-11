@@ -12,7 +12,7 @@ export interface SpawnResult {
  * Spawn a new agent task in its own worktree + zellij pane.
  *
  * Composes one shell-free command:
- *   zellij action new-pane -n <slug> -- wt switch -c <slug> -x <agent> -- <description>
+ *   zellij action new-pane -n <slug> -- wt switch -c [--base <base>] <slug> -x <agent> -- <description>
  *
  * worktrunk handles worktree creation and `cd`; the agent inherits that cwd
  * and receives the description as its first prompt.
@@ -20,15 +20,22 @@ export interface SpawnResult {
 export async function spawnAgent(opts: {
   description: string;
   agent: AgentKind;
+  /** Branch/worktree name. Defaults to a slug derived from the description. */
+  branch?: string;
+  /** Optional base branch/ref passed through to `wt switch --base`. */
+  base?: string;
   cwd?: string;
   /** Optional pane id of an existing agent to stack onto. */
   anchorPaneId?: string | null;
 }): Promise<SpawnResult> {
-  const slug = slugify(opts.description);
+  const slug = opts.branch ?? slugify(opts.description);
+  const switchArgs = ["switch", "-c"];
+  if (opts.base) switchArgs.push("--base", opts.base);
+  switchArgs.push(slug, "-x", opts.agent, "--", opts.description);
   const paneId = await spawnPane({
     name: slug,
     command: "wt",
-    args: ["switch", "-c", slug, "-x", opts.agent, "--", opts.description],
+    args: switchArgs,
     cwd: opts.cwd,
     anchorPaneId: opts.anchorPaneId,
   });

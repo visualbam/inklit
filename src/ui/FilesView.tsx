@@ -4,6 +4,7 @@ import type { StatusEntry } from "../wt.js";
 
 interface Props {
   entries: StatusEntry[];
+  targetBranch: string;
   maxLines: number;
   offset: number;
   width: number;
@@ -11,11 +12,17 @@ interface Props {
 
 const LABEL_WIDTH = 10;
 
-export function FilesView({ entries, maxLines, offset, width }: Props) {
+export function FilesView({
+  entries,
+  targetBranch,
+  maxLines,
+  offset,
+  width,
+}: Props) {
   if (entries.length === 0) {
     return (
       <Box paddingX={1}>
-        <Text dimColor>(no task changes vs main version)</Text>
+        <Text dimColor>(no task changes vs {targetBranch})</Text>
       </Box>
     );
   }

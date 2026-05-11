@@ -6,6 +6,7 @@ import { UI } from "./theme.js";
 
 interface Props {
   mainVersion: MainVersion | null;
+  targetBranch: string;
   tasks: Task[];
   visibleTaskCount: number;
   filterQuery: string;
@@ -14,6 +15,7 @@ interface Props {
 
 export function MainVersionBar({
   mainVersion,
+  targetBranch,
   tasks,
   visibleTaskCount,
   filterQuery,
@@ -45,11 +47,15 @@ export function MainVersionBar({
   const filter = filterQuery.trim()
     ? ` · filter "${filterQuery.trim()}" ${visibleTaskCount}/${tasks.length}`
     : "";
+  const target =
+    targetBranch && targetBranch !== mainVersion.branch
+      ? ` · target ${targetBranch}`
+      : "";
   const summary = ` · main version ${mainVersion.branch || "unknown"} ${
     mainVersion.shortSha || "no sha"
   } ${mainVersion.dirty ? "dirty" : "clean"} · active ${counts.active} ready ${
     counts.ready
-  } done ${counts.done}${filter} · ${path}`;
+  } done ${counts.done}${target}${filter} · ${path}`;
   const maxSummary = Math.max(12, width - "inklit ".length - 2);
 
   return (

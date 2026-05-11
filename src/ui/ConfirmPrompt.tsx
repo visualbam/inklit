@@ -5,23 +5,29 @@ import { UI } from "./theme.js";
 interface Props {
   action: "merge" | "kill" | "closeAll";
   slug: string;
+  targetBranch?: string;
   busy?: boolean;
 }
 
-export function ConfirmPrompt({ action, slug, busy }: Props) {
+export function ConfirmPrompt({
+  action,
+  slug,
+  targetBranch = "main",
+  busy,
+}: Props) {
   const color = action === "kill" ? UI.danger : UI.warning;
   const verb =
     action === "kill"
       ? "kill"
       : action === "closeAll"
         ? "close all live panes"
-        : "apply to main";
+        : `apply to ${targetBranch}`;
   const detail =
     action === "kill"
       ? "Closes the zellij pane and runs `wt remove -f -D` (force, even if unmerged)."
       : action === "closeAll"
         ? "Closes live zellij agent panes only. Worktrees and task records survive; enter resumes later."
-      : "Runs `wt merge main` to apply this task into the main version (squash + remove on success).";
+        : `Runs \`wt merge ${targetBranch}\` to apply this task (squash + remove on success).`;
   return (
     <Box
       borderStyle="round"

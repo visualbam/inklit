@@ -54,6 +54,59 @@ Open a zellij session, drop into a git repo, and:
 inklit
 ```
 
+Use a different review/apply target with `--main` (also used as the default
+base for new dashboard-spawned tasks):
+
+```bash
+inklit --main develop
+```
+
+### Headless spawn
+
+Outside agents can create inklit tasks without driving the TUI:
+
+```bash
+inklit spawn --agent codex --branch H2040-api-validation --base develop -- \
+  "Fix API validation for H2040"
+```
+
+For several tasks that share a ticket prefix, use `--branch-prefix` and
+`--count`; each task gets a unique branch/worktree name:
+
+```bash
+inklit spawn --agent codex --branch-prefix H2040-jira-ticket-desc --count 3 -- \
+  "Work H2040 item {{index}}/{{count}} on {{branch}}"
+```
+
+That creates `H2040-jira-ticket-desc-1`, `H2040-jira-ticket-desc-2`, and
+`H2040-jira-ticket-desc-3`.
+
+For richer orchestration, pass a JSON task list:
+
+```bash
+inklit spawn --file tasks.json --format json
+```
+
+```json
+[
+  {
+    "branch": "H2040-api-validation",
+    "agent": "codex",
+    "base": "develop",
+    "prompt": "Fix API validation for H2040"
+  },
+  {
+    "branch": "H2040-ui-error-state",
+    "agent": "claude",
+    "base": "develop",
+    "prompt": "Add the H2040 UI error state"
+  }
+]
+```
+
+`inklit spawn` must run inside a zellij session because it creates zellij panes.
+Use `--cwd <repo>` when the calling process is outside the target checkout.
+
 ### Keybinds
 
 Movement is Vim/Helix-flavored.
@@ -80,13 +133,13 @@ Movement is Vim/Helix-flavored.
 | `i`      | send a one-line message into the selected agent's pane (Enter sends + presses return; esc cancels) |
 | `q` / `Ctrl-C` | exit the dashboard only; live agents keep running in zellij |
 | `Q`      | close all live agent panes after confirmation; worktrees survive |
-| `m`      | apply selected task to main — switches inspector to diff and asks y/n |
+| `m`      | apply selected task to the target branch — switches inspector to diff and asks y/n |
 | `A`      | archive/restore a ready, failed, or recently applied task without deleting the worktree |
 | `X`      | kill selected task — close pane + remove worktree (with y/n confirm) |
 | `t`      | inspector → task view (status, next action, checkpoint)      |
-| `f`      | inspector → files changed vs main version                  |
-| `d`      | inspector → final patch vs main version                    |
-| `l`      | inspector → log of commits ahead of main version           |
+| `f`      | inspector → files changed vs target branch                 |
+| `d`      | inspector → final patch vs target branch                   |
+| `l`      | inspector → log of commits ahead of target branch          |
 | `a`      | inspector → live agent transcript tail                     |
 | `?`      | help overlay (toggle — `?` / esc / q to close)             |
 | `/`      | filter task list by slug, subject, lifecycle, pane state, or path |
@@ -95,8 +148,8 @@ Movement is Vim/Helix-flavored.
 ### Task Lifecycle
 
 The top line shows the **main version**: branch, short SHA, clean/dirty state,
-and the checkout path that receives applied task work. The task list shows two
-separate concepts:
+the current review/apply target when it differs, and the checkout path that
+receives applied task work. The task list shows two separate concepts:
 
 - **stage** is the Replit-style task lifecycle: `active` while an agent pane is
   live, `ready` when work is available for review without a live pane, and
@@ -150,7 +203,8 @@ counts do not block list navigation.
 
 ```
 src/
-  index.tsx        entry, --version/--help, mounts <App>
+  index.tsx        entry, --version/--help/spawn, mounts <App>
+  cli.ts           headless spawn command + global --main parsing
   model.ts         Task, AppState, action types
   wt.ts            wrapper over `wt list` (JSON) + git review helpers
   zellij.ts        list-panes, dump-screen, focus-pane-id, new-pane
@@ -186,6 +240,9 @@ When you press `n`:
    inside it, and surfaces it as a named zellij pane. The next status poll
    picks it up and shows it as `running`.
 
+If the dashboard was launched with `inklit --main <branch>`, new dashboard
+tasks pass that branch through as `wt switch --base <branch>`.
+
 ### Resume
 
 Closing an agent's zellij pane (or letting it exit) leaves the task in
@@ -216,13 +273,13 @@ The bottom half of the screen is the inspector. Toggle with `t`/`f`/`d`/`l`/`a`:
   checkpoint, dirty status, review badges, a task timeline, suggested next
   tasks, and pointers to review/thread controls.
 - **`f` files** — `git diff --name-status --find-renames <merge-base>` parsed
-  into a list of all tracked task changes vs the main version, plus untracked
+  into a list of all tracked task changes vs the target branch, plus untracked
   files from `git ls-files --others --exclude-standard`. Rows include best-effort
   `+N -M` counts from `git diff --numstat`.
 - **`d` diff** — unified final patch from `git diff --find-renames <merge-base>`
   plus per-untracked-file `git diff --no-index /dev/null <file>` so brand-new
   files render in unified format. Capped at ~200KB.
-- **`l` log** — `git log --oneline --decorate main..HEAD`.
+- **`l` log** — `git log --oneline --decorate <target>..HEAD`.
 - **`a` agent** — last 200 lines of the agent's zellij pane via
   `zellij action dump-screen -p <pane_id>`. The selected pane updates about
   once per second; background panes are scanned more slowly for waiting/idle
@@ -234,8 +291,9 @@ bottom. You see exactly what you're about to apply before pressing `y`.
 
 ### Destructive actions
 
-`m` runs `wt -C <worktree> merge main -y` to apply the task into the main
-version (squash + auto-remove on success).
+`m` runs `wt -C <worktree> merge <target> -y` to apply the task into the
+target branch (squash + auto-remove on success). The default target is `main`;
+override it with `inklit --main <branch>` or `INKLIT_MAIN_BRANCH=<branch>`.
 `X` focuses the pane → `zellij action close-pane` → `wt remove <slug> -y -f -D`
 (force the worktree gone even with uncommitted changes; force-delete the
 branch even if unapplied). Both prompt for `y`/`n` first; `esc` cancels. `m`

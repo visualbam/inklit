@@ -7,66 +7,75 @@ interface Section {
   rows: [string, string][];
 }
 
-const SECTIONS: Section[] = [
-  {
-    title: "Navigation",
-    rows: [
-      ["j / ↓", "next task"],
-      ["k / ↑", "previous task"],
-      ["[", "jump to first task"],
-      ["]", "jump to last task"],
-      ["/", "filter the task list"],
-      ["r", "force refresh task board"],
-      ["v", "toggle detailed / compact task board"],
-      ["z", "show / hide archived tasks"],
-      [":", "open command palette"],
-    ],
-  },
-  {
-    title: "Inspector",
-    rows: [
-      ["t", "task view (Replit-style status, next action, checkpoint)"],
-      ["f", "files changed vs main version"],
-      ["d", "final patch vs main version (tracked + untracked)"],
-      ["l", "log of commits ahead of main version"],
-      ["a", "live agent transcript (auto-tail)"],
-      ["J / K", "scroll inspector down / up by line"],
-      ["Ctrl-D / Ctrl-U", "scroll inspector by half-page"],
-      ["gg / G", "jump inspector to top / bottom"],
-    ],
-  },
-  {
-    title: "Actions",
-    rows: [
-      ["n", "new agent task — prompts for description, then agent (c/x)"],
-      ["T / 1", "start the top suggested next task"],
-      ["2", "start the second suggested next task when shown"],
-      ["enter", "focus pane (live) · resume agent (ready)"],
-      ["i", "send a one-line message to the selected agent"],
-      ["m", "apply selected task to main (review then confirm)"],
-      ["s", "sync main → selected task (rebase, auto-resolve conflicts)"],
-      ["A", "archive or restore selected ready/done task"],
-      ["X", "kill selected — close pane + remove worktree"],
-      ["Q", "close all live agent panes (worktrees survive)"],
-    ],
-  },
-  {
-    title: "Quit",
-    rows: [
-      ["q / Ctrl-C", "exit dashboard only; agents keep running"],
-    ],
-  },
-  {
-    title: "Prompts",
-    rows: [
-      ["esc", "cancel the current prompt"],
-      ["y / n", "answer confirm prompts (apply / kill)"],
-      ["c / x", "pick claude / codex in the agent picker"],
-    ],
-  },
-];
+function sections(targetBranch: string): Section[] {
+  return [
+    {
+      title: "Navigation",
+      rows: [
+        ["j / ↓", "next task"],
+        ["k / ↑", "previous task"],
+        ["[", "jump to first task"],
+        ["]", "jump to last task"],
+        ["/", "filter the task list"],
+        ["r", "force refresh task board"],
+        ["v", "toggle detailed / compact task board"],
+        ["z", "show / hide archived tasks"],
+        [":", "open command palette"],
+      ],
+    },
+    {
+      title: "Inspector",
+      rows: [
+        ["t", "task view (Replit-style status, next action, checkpoint)"],
+        ["f", `files changed vs ${targetBranch}`],
+        ["d", `final patch vs ${targetBranch} (tracked + untracked)`],
+        ["l", `log of commits ahead of ${targetBranch}`],
+        ["a", "live agent transcript (auto-tail)"],
+        ["J / K", "scroll inspector down / up by line"],
+        ["Ctrl-D / Ctrl-U", "scroll inspector by half-page"],
+        ["gg / G", "jump inspector to top / bottom"],
+      ],
+    },
+    {
+      title: "Actions",
+      rows: [
+        ["n", "new agent task - prompts for description, then agent (c/x)"],
+        ["T / 1", "start the top suggested next task"],
+        ["2", "start the second suggested next task when shown"],
+        ["enter", "focus pane (live) · resume agent (ready)"],
+        ["i", "send a one-line message to the selected agent"],
+        ["m", `apply selected task to ${targetBranch} (review then confirm)`],
+        ["s", `sync ${targetBranch} -> selected task (rebase)`],
+        ["A", "archive or restore selected ready/done task"],
+        ["X", "kill selected - close pane + remove worktree"],
+        ["Q", "close all live agent panes (worktrees survive)"],
+      ],
+    },
+    {
+      title: "Quit",
+      rows: [["q / Ctrl-C", "exit dashboard only; agents keep running"]],
+    },
+    {
+      title: "Prompts",
+      rows: [
+        ["esc", "cancel the current prompt"],
+        ["y / n", "answer confirm prompts (apply / kill)"],
+        ["c / x", "pick claude / codex in the agent picker"],
+      ],
+    },
+    {
+      title: "CLI",
+      rows: [
+        ["--main", `review/apply target: ${targetBranch}`],
+        ["spawn", "spawn --branch <name> --agent codex -- <prompt>"],
+        ["batch", "spawn --branch-prefix <prefix> --count <n>"],
+      ],
+    },
+  ];
+}
 
-export function HelpOverlay() {
+export function HelpOverlay({ targetBranch }: { targetBranch: string }) {
+  const SECTIONS = sections(targetBranch);
   const maxKey = Math.max(
     ...SECTIONS.flatMap((s) => s.rows.map((r) => r[0].length))
   );

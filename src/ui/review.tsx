@@ -52,7 +52,7 @@ export function reviewSummary(task: Task): string {
 }
 
 export function reviewSentence(task: Task): string {
-  if (task.state === "merged") return "Applied to the main version.";
+  if (task.state === "merged") return "Applied to the target branch.";
   const stats = task.review;
   if (!stats) return "Review stats are still being sampled.";
   if (stats.files === 0 && stats.commitsAhead === 0 && stats.untracked === 0) {

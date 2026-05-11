@@ -9,6 +9,7 @@ import { suggestedFollowUps } from "./followUps.js";
 interface Props {
   selectedTask: Task | null;
   density: TaskListDensity;
+  targetBranch: string;
   showArchived: boolean;
   inSession: boolean;
   height: number;
@@ -24,12 +25,19 @@ interface CommandRow {
 export function CommandPalette({
   selectedTask,
   density,
+  targetBranch,
   showArchived,
   inSession,
   height,
   width,
 }: Props) {
-  const rows = commandRows(selectedTask, density, showArchived, inSession);
+  const rows = commandRows(
+    selectedTask,
+    density,
+    targetBranch,
+    showArchived,
+    inSession
+  );
   const maxRows = Math.max(3, height - (selectedTask ? 4 : 3));
   const visibleRows =
     rows.length > maxRows
@@ -87,6 +95,7 @@ export function CommandPalette({
 function commandRows(
   task: Task | null,
   density: TaskListDensity,
+  targetBranch: string,
   showArchived: boolean,
   inSession: boolean
 ): CommandRow[] {
@@ -106,7 +115,7 @@ function commandRows(
   rows.push(
     { key: "enter", label: live(task) ? "focus selected agent pane" : "resume selected task" },
     { key: "i", label: live(task) ? "message selected agent" : "message unavailable without a live pane", muted: !live(task) },
-    { key: "m", label: task.state === "merged" ? "already applied" : "review and apply to main", muted: task.state === "merged" },
+    { key: "m", label: task.state === "merged" ? "already applied" : `review and apply to ${targetBranch}`, muted: task.state === "merged" },
     { key: "X", label: task.state === "merged" ? "kill unavailable after apply" : "kill selected task with confirmation", muted: task.state === "merged" },
     { key: "A", label: lifecycleForTask(task) === "archived" ? "restore archived task" : "archive selected task" },
     { key: "t/f/d/l/a", label: "switch inspector mode" }

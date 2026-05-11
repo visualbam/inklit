@@ -3,32 +3,46 @@ import React from "react";
 import { render } from "ink";
 import { App } from "./ui/App.js";
 import { renameOwnPane } from "./zellij.js";
+import { parseGlobalArgs, rootHelp, runSpawnCommand } from "./cli.js";
+import type { GlobalArgs } from "./cli.js";
 
 const args = process.argv.slice(2);
-if (args.includes("-v") || args.includes("--version")) {
+let parsed: GlobalArgs;
+try {
+  parsed = parseGlobalArgs(args);
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
+
+if (parsed.command === "version") {
   // eslint-disable-next-line no-console
   console.log("inklit 0.0.1");
   process.exit(0);
 }
-if (args.includes("-h") || args.includes("--help")) {
+
+if (parsed.command === "help") {
   // eslint-disable-next-line no-console
-  console.log(
-    [
-      "inklit — TUI for parallel AI coding agents in git worktrees.",
-      "",
-      "Usage:  inklit",
-      "",
-      "Run inside a zellij session for full functionality (focus + spawn).",
-      "Outside zellij, the list still renders read-only.",
-      "",
-      "Keys: j/k move, gg/G top/bottom, n new task, m apply, q quit.",
-    ].join("\n")
-  );
+  console.log(rootHelp());
   process.exit(0);
 }
 
+if (parsed.command === "spawn") {
+  try {
+    const defaultBase =
+      parsed.mainBranch === "main" ? undefined : parsed.mainBranch;
+    const code = await runSpawnCommand(parsed.commandArgs, { defaultBase });
+    process.exit(code);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
 renameOwnPane("inklit");
-const { waitUntilExit } = render(<App />);
+const { waitUntilExit } = render(<App mainBranch={parsed.mainBranch} />);
 waitUntilExit().then(
   () => process.exit(0),
   (err) => {
