@@ -100,6 +100,7 @@ export interface AppState {
     | "confirmKill"
     | "confirmCloseAll"
     | "merging"
+    | "syncing"
     | "killing"
     | "closingAll"
     | "resumeAgentPicker"

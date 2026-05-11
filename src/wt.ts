@@ -720,6 +720,52 @@ export async function mergeToMain(
 }
 
 /**
+ * Rebase the task branch onto `target` (default `main`), pulling the latest
+ * main changes into the worktree. Conflict cycles are resolved automatically
+ * via Claude until the rebase completes. The rebase is aborted if resolution
+ * itself fails, leaving the worktree in its original state.
+ */
+export async function syncFromMain(
+  worktreePath: string,
+  target = "main"
+): Promise<void> {
+  const continueRebase = () =>
+    execa("git", ["-C", worktreePath, "rebase", "--continue"], {
+      env: { ...process.env, GIT_EDITOR: "true" },
+      reject: true,
+    });
+
+  async function resolveAndContinue(): Promise<void> {
+    const stuck = await conflictedFiles(worktreePath);
+    if (stuck.length === 0) throw new Error("Rebase failed with no conflicted files");
+    await resolveConflictsWithClaude(worktreePath);
+    try {
+      await continueRebase();
+    } catch {
+      await resolveAndContinue();
+    }
+  }
+
+  try {
+    await execa("git", ["-C", worktreePath, "rebase", target], { reject: true });
+  } catch (err) {
+    const e = err as ExecaError;
+    const stderr = typeof e.stderr === "string" ? e.stderr : "";
+    const stuck = await conflictedFiles(worktreePath);
+    if (stuck.length > 0) {
+      try {
+        await resolveAndContinue();
+        return;
+      } catch (resolveErr) {
+        await execa("git", ["-C", worktreePath, "rebase", "--abort"], { reject: false });
+        throw resolveErr;
+      }
+    }
+    throw new WtError(`sync from ${target} failed: ${e.shortMessage ?? e.message}`, stderr);
+  }
+}
+
+/**
  * Remove a worktree by branch name. Forces both worktree removal (uncommitted
  * changes) and unmerged-branch deletion — `X` is "I want this gone."
  */

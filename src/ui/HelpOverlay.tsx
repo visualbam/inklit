@@ -44,6 +44,7 @@ const SECTIONS: Section[] = [
       ["enter", "focus pane (live) · resume agent (ready)"],
       ["i", "send a one-line message to the selected agent"],
       ["m", "apply selected task to main (review then confirm)"],
+      ["s", "sync main → selected task (rebase, auto-resolve conflicts)"],
       ["A", "archive or restore selected ready/done task"],
       ["X", "kill selected — close pane + remove worktree"],
       ["Q", "close all live agent panes (worktrees survive)"],

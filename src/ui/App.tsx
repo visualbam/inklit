@@ -27,6 +27,7 @@ import {
   detectPermissionRequest,
   detectWaiting,
   mergeToMain,
+  syncFromMain,
   removeWorktree,
   type StatusEntry,
 } from "../wt.js";
@@ -99,6 +100,7 @@ type Action =
   | { type: "mode/confirmKill" }
   | { type: "mode/confirmCloseAll" }
   | { type: "mode/merging" }
+  | { type: "mode/syncing" }
   | { type: "mode/killing" }
   | { type: "mode/closingAll" }
   | { type: "mode/resumeAgentPicker"; slug: string }
@@ -353,6 +355,8 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, mode: "confirmCloseAll" };
     case "mode/merging":
       return { ...s, mode: "merging" };
+    case "mode/syncing":
+      return { ...s, mode: "syncing" };
     case "mode/killing":
       return { ...s, mode: "killing" };
     case "mode/closingAll":
@@ -1147,6 +1151,7 @@ export function App() {
       if (state.mode === "spawning") return;
       if (
         state.mode === "merging" ||
+        state.mode === "syncing" ||
         state.mode === "killing" ||
         state.mode === "closingAll"
       ) {
@@ -1387,6 +1392,11 @@ export function App() {
 
       if (input === "m") {
         requestApplySelected();
+        return;
+      }
+      if (input === "s") {
+        const slug = state.selectedSlug;
+        if (slug) void doSync(slug);
         return;
       }
       if (input === "X") {
@@ -1656,6 +1666,28 @@ export function App() {
     }
   }
 
+  async function doSync(slug: string) {
+    const task = state.tasks.find((t) => t.slug === slug);
+    if (!task) return;
+    dispatch({ type: "mode/syncing" });
+    try {
+      await syncFromMain(task.path);
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "flash", message: `Synced main → ${slug}` });
+    } catch (err) {
+      dispatch({ type: "mode/list" });
+      const base = err instanceof Error ? err.message : String(err);
+      const firstStderrLine = (err as { stderr?: string }).stderr
+        ?.split("\n")
+        .map((l) => l.replace(/^[✗✓◎→↳\s]+/, "").trim())
+        .find((l) => l.length > 0);
+      dispatch({
+        type: "error",
+        message: firstStderrLine ? `${base}: ${firstStderrLine}` : base,
+      });
+    }
+  }
+
   async function doArchiveSelected() {
     const slug = state.selectedSlug;
     if (!slug) return;
@@ -1866,6 +1898,7 @@ export function App() {
     state.mode === "confirmKill" ||
     state.mode === "confirmCloseAll" ||
     state.mode === "merging" ||
+      state.mode === "syncing" ||
       state.mode === "killing" ||
       state.mode === "closingAll";
   const showSendInput = state.mode === "sendInput" || state.mode === "sending";
@@ -2034,6 +2067,7 @@ export function App() {
               }
               busy={
                 state.mode === "merging" ||
+                state.mode === "syncing" ||
                 state.mode === "killing" ||
                 state.mode === "closingAll"
               }
