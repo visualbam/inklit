@@ -44,6 +44,8 @@ import {
   clearPane,
   recordRemove,
   recordLifecycle,
+  recordListDensity,
+  loadUiPrefs,
   snapshotTask,
   type TaskRecord,
 } from "../state.js";
@@ -56,6 +58,7 @@ import type {
   ReviewStats,
   Task,
   TaskLifecycle,
+  TaskListDensity,
   TaskState,
 } from "../model.js";
 import { initialState, lifecycleForTask } from "../model.js";
@@ -105,6 +108,7 @@ type Action =
   | { type: "mode/filter" }
   | { type: "mode/commandPalette" }
   | { type: "mode/help" }
+  | { type: "prefs/loaded"; listDensity?: TaskListDensity }
   | { type: "list/toggleDensity" }
   | { type: "archive/toggleVisibility" }
   | { type: "sendInput/setValue"; value: string }
@@ -378,6 +382,8 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, mode: "commandPalette" };
     case "mode/help":
       return { ...s, mode: "help" };
+    case "prefs/loaded":
+      return a.listDensity ? { ...s, listDensity: a.listDensity } : s;
     case "list/toggleDensity":
       return {
         ...s,
@@ -621,6 +627,7 @@ export function App() {
   const reviewStatsRef = useRef<Map<string, ReviewStatsCacheEntry>>(new Map());
   const completedTasksRef = useRef<Map<string, CompletedTaskEntry>>(new Map());
   const reviewScanIndexRef = useRef(0);
+  const densityTouchedRef = useRef(false);
   /** Last observed state per slug — used to fire one notification per transition. */
   const prevStatesRef = useRef<Map<string, TaskState>>(new Map());
   /**
@@ -632,6 +639,19 @@ export function App() {
   );
   /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
   const closingAllRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadUiPrefs()
+      .then((prefs) => {
+        if (cancelled || densityTouchedRef.current) return;
+        dispatch({ type: "prefs/loaded", listDensity: prefs.listDensity });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     latestTasksRef.current = state.tasks;
@@ -1393,7 +1413,9 @@ export function App() {
 
   function toggleDensity() {
     const next = state.listDensity === "compact" ? "detailed" : "compact";
+    densityTouchedRef.current = true;
     dispatch({ type: "list/toggleDensity" });
+    recordListDensity(next).catch(() => {});
     dispatch({ type: "flash", message: `Task board: ${next}` });
   }
 

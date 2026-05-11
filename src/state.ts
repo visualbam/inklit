@@ -1,7 +1,13 @@
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import type { AgentKind, ReviewStats, Task, TaskLifecycle } from "./model.js";
+import type {
+  AgentKind,
+  ReviewStats,
+  Task,
+  TaskLifecycle,
+  TaskListDensity,
+} from "./model.js";
 
 export interface TaskSnapshot {
   path: string;
@@ -30,9 +36,14 @@ export interface TaskRecord {
   paneId?: string;
 }
 
+export interface UiPrefs {
+  listDensity?: TaskListDensity;
+}
+
 interface StateFile {
   version: 1;
   tasks: Record<string, TaskRecord>;
+  ui?: UiPrefs;
 }
 
 function statePath(): string {
@@ -142,6 +153,27 @@ export function snapshotTask(task: Task): TaskSnapshot {
   };
 }
 
+/** Persist dashboard-level UI preferences. */
+export async function recordListDensity(
+  listDensity: TaskListDensity
+): Promise<void> {
+  const state = await readFile();
+  state.ui = {
+    ...state.ui,
+    listDensity,
+  };
+  await writeFile(state);
+}
+
+export async function loadUiPrefs(): Promise<UiPrefs> {
+  const state = await readFile();
+  return {
+    listDensity: isListDensity(state.ui?.listDensity)
+      ? state.ui.listDensity
+      : undefined,
+  };
+}
+
 /**
  * Adopt a paneId for a slug discovered via title-based lookup. Used as a
  * one-shot upgrade for legacy tasks (spawned before paneId tracking) when
@@ -190,4 +222,8 @@ export async function getAgent(slug: string): Promise<AgentKind | null> {
 export async function loadAll(): Promise<Record<string, TaskRecord>> {
   const state = await readFile();
   return state.tasks;
+}
+
+function isListDensity(value: unknown): value is TaskListDensity {
+  return value === "detailed" || value === "compact";
 }

@@ -112,7 +112,8 @@ separate concepts:
 
 The board is grouped by urgency (`Waiting`, `Running`, `Idle`, `Ready`,
 `Failed`, `Done`, then archived rows when visible). Press `v` to switch between
-the detailed table and compact two-line task cards.
+the detailed table and compact two-line task cards; lazyagent remembers that
+layout across restarts.
 
 ### Pane Icons
 
@@ -200,9 +201,10 @@ The agent kind is recorded at spawn time in
 `$XDG_STATE_HOME/lazyagent/tasks.json` (default `~/.local/state/...`). Tasks
 created before lazyagent existed — or via `wt switch` directly — won't have
 an entry, so resume opens the agent picker and remembers your choice for
-next time. The same file stores lifecycle overrides for archived rows and
-recently applied rows, so archive/done state survives restarting the TUI. `X`
-(kill) drops the entry so a future task with the same slug starts clean.
+next time. The same file stores lifecycle overrides for archived rows, recently
+applied rows, and UI preferences like detailed/compact board layout, so those
+choices survive restarting the TUI. `X` (kill) drops the entry so a future task
+with the same slug starts clean.
 
 ### Inspector modes
 
