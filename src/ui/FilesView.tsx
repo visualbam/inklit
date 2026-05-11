@@ -1,6 +1,8 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { StatusEntry } from "../wt.js";
+import { padRight, truncateMiddle } from "./text.js";
+import { windowWithMarkers } from "./windowing.js";
 
 interface Props {
   entries: StatusEntry[];
@@ -47,7 +49,7 @@ export function FilesView({
         const pathWidth = Math.max(1, width - LABEL_WIDTH - 1 - statReserve);
         return (
           <Box key={e.path}>
-            <Text color={fg}>{padEnd(label, LABEL_WIDTH)}</Text>
+            <Text color={fg}>{padRight(label, LABEL_WIDTH)}</Text>
             <Text> </Text>
             <Text>{truncateMiddle(e.path, pathWidth)}</Text>
             {stat ? (
@@ -78,34 +80,4 @@ function describe(code: string): { fg: string; label: string } {
   if (c.startsWith("D") || c.endsWith("D")) return { fg: "red", label: "deleted" };
   if (c.startsWith("R")) return { fg: "magenta", label: "renamed" };
   return { fg: "white", label: code };
-}
-
-function padEnd(s: string, n: number): string {
-  return s.length >= n ? s : s + " ".repeat(n - s.length);
-}
-
-function windowWithMarkers<T>(items: T[], maxLines: number, offset: number) {
-  const total = items.length;
-  const maxOffset =
-    total <= maxLines ? 0 : total - Math.max(1, maxLines - 1);
-  const start = Math.min(Math.max(0, offset), Math.max(0, maxOffset));
-  const above = start;
-  const hasAbove = above > 0;
-  let budget = Math.max(0, maxLines - (hasAbove ? 1 : 0));
-  let visible = items.slice(start, start + budget);
-  let below = Math.max(0, total - start - visible.length);
-  if (below > 0 && budget > 0) {
-    budget -= 1;
-    visible = items.slice(start, start + budget);
-    below = Math.max(0, total - start - visible.length);
-  }
-  return { visible, above, below };
-}
-
-function truncateMiddle(s: string, max: number): string {
-  if (max <= 1) return s.slice(0, Math.max(0, max));
-  if (s.length <= max) return s;
-  const head = Math.max(1, Math.ceil((max - 1) * 0.4));
-  const tail = Math.max(1, max - head - 1);
-  return `${s.slice(0, head)}…${s.slice(-tail)}`;
 }

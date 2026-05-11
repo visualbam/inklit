@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type {
@@ -57,7 +58,12 @@ async function readFile(): Promise<StateFile> {
   try {
     const raw = await fs.readFile(statePath(), "utf-8");
     const parsed = JSON.parse(raw) as StateFile;
-    if (parsed.version === 1 && parsed.tasks && typeof parsed.tasks === "object") {
+    if (
+      parsed.version === 1 &&
+      parsed.tasks &&
+      typeof parsed.tasks === "object" &&
+      !Array.isArray(parsed.tasks)
+    ) {
       return parsed;
     }
   } catch (err) {
@@ -75,8 +81,28 @@ async function readFile(): Promise<StateFile> {
 
 async function writeFile(state: StateFile): Promise<void> {
   const path = statePath();
-  await fs.mkdir(dirname(path), { recursive: true });
-  await fs.writeFile(path, JSON.stringify(state, null, 2), "utf-8");
+  const dir = dirname(path);
+  const tmpPath = join(
+    dir,
+    `.tasks-${process.pid}-${Date.now()}-${randomUUID()}.json.tmp`
+  );
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), "utf-8");
+  try {
+    await fs.rename(tmpPath, path);
+  } catch (err) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
+}
+
+async function withState(
+  mutate: (state: StateFile) => void | false | Promise<void | false>
+): Promise<void> {
+  const state = await readFile();
+  const result = await mutate(state);
+  if (result === false) return;
+  await writeFile(state);
 }
 
 /** Record that we spawned `slug` with `agent`. Idempotent. */
@@ -85,15 +111,16 @@ export async function recordSpawn(
   agent: AgentKind,
   paneId?: string | null
 ): Promise<void> {
-  const state = await readFile();
-  state.tasks[slug] = {
-    agent,
-    spawnedAt: state.tasks[slug]?.spawnedAt ?? Date.now(),
-    paneId: paneId ?? state.tasks[slug]?.paneId,
-    lifecycle: "active",
-    lifecycleAt: Date.now(),
-  };
-  await writeFile(state);
+  const now = Date.now();
+  await withState((state) => {
+    state.tasks[slug] = {
+      agent,
+      spawnedAt: state.tasks[slug]?.spawnedAt ?? now,
+      paneId: paneId ?? state.tasks[slug]?.paneId,
+      lifecycle: "active",
+      lifecycleAt: now,
+    };
+  });
 }
 
 /** Touch the task's lastResumedAt. Creates the entry if missing. */
@@ -102,17 +129,18 @@ export async function recordResume(
   agent: AgentKind,
   paneId?: string | null
 ): Promise<void> {
-  const state = await readFile();
-  const existing = state.tasks[slug] ?? { spawnedAt: Date.now() };
-  state.tasks[slug] = {
-    agent,
-    spawnedAt: existing?.spawnedAt ?? Date.now(),
-    lastResumedAt: Date.now(),
-    paneId: paneId ?? existing?.paneId,
-    lifecycle: "active",
-    lifecycleAt: Date.now(),
-  };
-  await writeFile(state);
+  const now = Date.now();
+  await withState((state) => {
+    const existing = state.tasks[slug] ?? { spawnedAt: now };
+    state.tasks[slug] = {
+      agent,
+      spawnedAt: existing.spawnedAt,
+      lastResumedAt: now,
+      paneId: paneId ?? existing.paneId,
+      lifecycle: "active",
+      lifecycleAt: now,
+    };
+  });
 }
 
 /** Persist an explicit lifecycle marker. `null` clears the override. */
@@ -121,24 +149,25 @@ export async function recordLifecycle(
   lifecycle: TaskLifecycle | null,
   snapshot?: TaskSnapshot
 ): Promise<void> {
-  const state = await readFile();
-  const existing = state.tasks[slug] ?? { spawnedAt: Date.now() };
-  if (lifecycle === null) {
-    state.tasks[slug] = {
-      ...existing,
-      lifecycle: undefined,
-      lifecycleAt: undefined,
-      snapshot: undefined,
-    };
-  } else {
+  const now = Date.now();
+  await withState((state) => {
+    const existing = state.tasks[slug] ?? { spawnedAt: now };
+    if (lifecycle === null) {
+      state.tasks[slug] = {
+        ...existing,
+        lifecycle: undefined,
+        lifecycleAt: undefined,
+        snapshot: undefined,
+      };
+      return;
+    }
     state.tasks[slug] = {
       ...existing,
       lifecycle,
-      lifecycleAt: Date.now(),
+      lifecycleAt: now,
       snapshot: snapshot ?? existing.snapshot,
     };
-  }
-  await writeFile(state);
+  });
 }
 
 export function snapshotTask(task: Task): TaskSnapshot {
@@ -157,12 +186,12 @@ export function snapshotTask(task: Task): TaskSnapshot {
 export async function recordListDensity(
   listDensity: TaskListDensity
 ): Promise<void> {
-  const state = await readFile();
-  state.ui = {
-    ...state.ui,
-    listDensity,
-  };
-  await writeFile(state);
+  await withState((state) => {
+    state.ui = {
+      ...state.ui,
+      listDensity,
+    };
+  });
 }
 
 export async function loadUiPrefs(): Promise<UiPrefs> {
@@ -184,12 +213,12 @@ export async function recordPane(
   slug: string,
   paneId: string
 ): Promise<void> {
-  const state = await readFile();
-  const existing = state.tasks[slug];
-  if (!existing) return;
-  if (existing.paneId === paneId) return;
-  state.tasks[slug] = { ...existing, paneId };
-  await writeFile(state);
+  await withState((state) => {
+    const existing = state.tasks[slug];
+    if (!existing) return false;
+    if (existing.paneId === paneId) return false;
+    state.tasks[slug] = { ...existing, paneId };
+  });
 }
 
 /**
@@ -197,19 +226,19 @@ export async function recordPane(
  * Keeps the task record so resume still knows the agent kind.
  */
 export async function clearPane(slug: string): Promise<void> {
-  const state = await readFile();
-  const existing = state.tasks[slug];
-  if (!existing || !existing.paneId) return;
-  state.tasks[slug] = { ...existing, paneId: undefined };
-  await writeFile(state);
+  await withState((state) => {
+    const existing = state.tasks[slug];
+    if (!existing || !existing.paneId) return false;
+    state.tasks[slug] = { ...existing, paneId: undefined };
+  });
 }
 
 /** Drop a task entry (e.g. after `X` kill succeeds). Best-effort. */
 export async function recordRemove(slug: string): Promise<void> {
-  const state = await readFile();
-  if (!(slug in state.tasks)) return;
-  delete state.tasks[slug];
-  await writeFile(state);
+  await withState((state) => {
+    if (!(slug in state.tasks)) return false;
+    delete state.tasks[slug];
+  });
 }
 
 /** Look up the agent kind we recorded for `slug`. Returns null when unknown. */

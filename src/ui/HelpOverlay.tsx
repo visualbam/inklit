@@ -1,83 +1,13 @@
 import React from "react";
 import { Box, Text } from "ink";
+import { helpSections } from "./commands.js";
 import { UI } from "./theme.js";
-
-interface Section {
-  title: string;
-  rows: [string, string][];
-}
-
-function sections(targetBranch: string): Section[] {
-  return [
-    {
-      title: "Navigation",
-      rows: [
-        ["j / ↓", "next task"],
-        ["k / ↑", "previous task"],
-        ["[", "jump to first task"],
-        ["]", "jump to last task"],
-        ["/", "filter the task list"],
-        ["r", "force refresh task board"],
-        ["v", "toggle detailed / compact task board"],
-        ["z", "show / hide archived tasks"],
-        [":", "open command palette"],
-      ],
-    },
-    {
-      title: "Inspector",
-      rows: [
-        ["t", "task view (Replit-style status, next action, checkpoint)"],
-        ["f", `files changed vs ${targetBranch}`],
-        ["d", `final patch vs ${targetBranch} (tracked + untracked)`],
-        ["l", `log of commits ahead of ${targetBranch}`],
-        ["a", "live agent transcript (auto-tail)"],
-        ["J / K", "scroll inspector down / up by line"],
-        ["Ctrl-D / Ctrl-U", "scroll inspector by half-page"],
-        ["gg / G", "jump inspector to top / bottom"],
-      ],
-    },
-    {
-      title: "Actions",
-      rows: [
-        ["n", "new agent task - prompts for description, then agent (c/x)"],
-        ["T / 1", "start the top suggested next task"],
-        ["2", "start the second suggested next task when shown"],
-        ["enter", "focus pane (live) · resume agent (ready)"],
-        ["i", "send a one-line message to the selected agent"],
-        ["m", `apply selected task to ${targetBranch} (review then confirm)`],
-        ["s", `sync ${targetBranch} -> selected task (rebase)`],
-        ["A", "archive or restore selected ready/done task"],
-        ["X", "kill selected - close pane + remove worktree"],
-        ["Q", "close all live agent panes (worktrees survive)"],
-      ],
-    },
-    {
-      title: "Quit",
-      rows: [["q / Ctrl-C", "exit dashboard only; agents keep running"]],
-    },
-    {
-      title: "Prompts",
-      rows: [
-        ["esc", "cancel the current prompt"],
-        ["y / n", "answer confirm prompts (apply / kill)"],
-        ["c / x", "pick claude / codex in the agent picker"],
-      ],
-    },
-    {
-      title: "CLI",
-      rows: [
-        ["--main", `review/apply target: ${targetBranch}`],
-        ["spawn", "spawn --branch <name> --agent codex -- <prompt>"],
-        ["batch", "spawn --branch-prefix <prefix> --count <n>"],
-      ],
-    },
-  ];
-}
+import { padRight } from "./text.js";
 
 export function HelpOverlay({ targetBranch }: { targetBranch: string }) {
-  const SECTIONS = sections(targetBranch);
+  const sections = helpSections(targetBranch);
   const maxKey = Math.max(
-    ...SECTIONS.flatMap((s) => s.rows.map((r) => r[0].length))
+    ...sections.flatMap((s) => s.rows.map((r) => r[0].length))
   );
   return (
     <Box
@@ -93,7 +23,7 @@ export function HelpOverlay({ targetBranch }: { targetBranch: string }) {
           inklit — keybinds
         </Text>
       </Box>
-      {SECTIONS.map((s, i) => (
+      {sections.map((s, i) => (
         <Box
           key={s.title}
           flexDirection="column"
@@ -114,8 +44,4 @@ export function HelpOverlay({ targetBranch }: { targetBranch: string }) {
       </Box>
     </Box>
   );
-}
-
-function padRight(s: string, n: number): string {
-  return s.length >= n ? s : s + " ".repeat(n - s.length);
 }

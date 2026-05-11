@@ -5,6 +5,7 @@ import { lifecycleForTask } from "../model.js";
 import { LIFECYCLE_LABEL, formatStateLabel } from "./icons.js";
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
+import { truncate } from "./text.js";
 
 interface Props {
   flash: string | null;
@@ -83,9 +84,4 @@ function nextAction(task: Task | null, inSession: boolean): string {
   if (task.state === "ready") return "Next: review diff or T follow-up";
   if (task.state === "merged") return "Next: T follow-up or let it fade out";
   return "Next: inspect task";
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
 }

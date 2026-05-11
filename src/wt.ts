@@ -438,7 +438,7 @@ export async function gitDiff(
     }
 
     const combined = parts.join("\n");
-    if (!combined) return "(no changes vs main version)";
+    if (!combined) return `(no changes vs ${target})`;
     if (combined.length > maxBytes) {
       return (
         combined.slice(0, maxBytes) +
@@ -549,7 +549,7 @@ export async function gitLog(
       ],
       { reject: true, stripFinalNewline: true }
     );
-    return stdout || "(no commits ahead of main version)";
+    return stdout || `(no commits ahead of ${target})`;
   } catch (err) {
     const e = err as ExecaError;
     return `git log failed: ${e.shortMessage ?? e.message}`;

@@ -2,6 +2,7 @@ import React from "react";
 import { Text } from "ink";
 import type { Task } from "../model.js";
 import { UI } from "./theme.js";
+import { truncate } from "./text.js";
 
 export interface ReviewBadge {
   label: string;
@@ -64,10 +65,4 @@ export function reviewSentence(task: Task): string {
 function plural(count: number, word: string): string {
   if (word === "untracked") return `${count} ${word}`;
   return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
-function truncate(s: string, max: number): string {
-  if (max <= 1) return s.slice(0, Math.max(0, max));
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
 }

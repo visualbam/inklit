@@ -13,6 +13,8 @@ import {
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
 import { reviewSentence, reviewSummary } from "./review.js";
+import { padRight, truncate } from "./text.js";
+import { windowWithMarkers } from "./windowing.js";
 
 interface Props {
   task: Task | null;
@@ -364,32 +366,4 @@ function modeLabel(mode: InspectorMode, targetBranch: string): string {
     case "agent":
       return "agent transcript (live)";
   }
-}
-
-function truncate(s: string, max: number): string {
-  if (max <= 1) return s.slice(0, Math.max(0, max));
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
-}
-
-function padRight(s: string, n: number): string {
-  return s.length >= n ? s : s + " ".repeat(n - s.length);
-}
-
-function windowWithMarkers<T>(items: T[], maxLines: number, offset: number) {
-  const total = items.length;
-  const maxOffset =
-    total <= maxLines ? 0 : total - Math.max(1, maxLines - 1);
-  const start = Math.min(Math.max(0, offset), Math.max(0, maxOffset));
-  const above = start;
-  const hasAbove = above > 0;
-  let budget = Math.max(0, maxLines - (hasAbove ? 1 : 0));
-  let visible = items.slice(start, start + budget);
-  let below = Math.max(0, total - start - visible.length);
-  if (below > 0 && budget > 0) {
-    budget -= 1;
-    visible = items.slice(start, start + budget);
-    below = Math.max(0, total - start - visible.length);
-  }
-  return { visible, above, below };
 }

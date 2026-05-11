@@ -12,6 +12,7 @@ import {
 } from "./icons.js";
 import { UI } from "./theme.js";
 import { ReviewBadges, reviewSummary } from "./review.js";
+import { truncate } from "./text.js";
 
 interface Props {
   tasks: Task[];
@@ -487,10 +488,4 @@ function countGroups(tasks: Task[]): number {
 function pad(s: string, n: number): string {
   if (s.length >= n) return s.slice(0, n);
   return s + " ".repeat(n - s.length);
-}
-
-function truncate(s: string, max: number): string {
-  if (max <= 1) return s.slice(0, Math.max(0, max));
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
 }
