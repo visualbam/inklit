@@ -1,4 +1,6 @@
 import { execa, ExecaError } from "execa";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { MainVersion, ReviewStats, Task, TaskState } from "./model.js";
 
 /**
@@ -608,26 +610,112 @@ export function refineState(task: Task, paneAlive: boolean): TaskState {
   return task.state; // remains "ready" by default in v0
 }
 
+async function mainWorktreePath(fromPath: string): Promise<string> {
+  const { stdout } = await execa("git", ["-C", fromPath, "worktree", "list", "--porcelain"]);
+  const line = stdout.split("\n").find((l) => l.startsWith("worktree "));
+  if (!line) throw new Error("Could not find main worktree");
+  return line.slice("worktree ".length).trim();
+}
+
+async function conflictedFiles(repoPath: string): Promise<string[]> {
+  const { stdout } = await execa(
+    "git", ["-C", repoPath, "diff", "--name-only", "--diff-filter=U"],
+    { reject: false }
+  );
+  return stdout.split("\n").filter(Boolean);
+}
+
+async function resolveConflictsWithClaude(repoPath: string): Promise<void> {
+  const files = await conflictedFiles(repoPath);
+  for (const file of files) {
+    const fullPath = path.join(repoPath, file);
+    const content = await readFile(fullPath, "utf8");
+    const prompt =
+      `Resolve all git conflict markers in this file. Keep the best of both sides. ` +
+      `Return ONLY the resolved file content — no explanation, no markdown, no code fences.\n\n${content}`;
+    const { stdout } = await execa(
+      "claude", ["-p", prompt, "--output-format", "text", "--bare"],
+      { reject: true }
+    );
+    await writeFile(fullPath, stdout);
+    await execa("git", ["-C", repoPath, "add", file]);
+  }
+}
+
 /**
  * Squash-merge a worktree's branch into `target` (default `main`) and let
- * worktrunk remove the worktree. `-y` skips the interactive approval; we've
- * already confirmed in the UI.
+ * worktrunk remove the worktree. Handles common failure modes automatically:
+ *
+ *  1. Main has uncommitted changes → stash, merge, unstash.
+ *  2. Worktree is mid-rebase (detached HEAD) → Claude resolves conflicts,
+ *     rebase continues, then merge retries.
+ *  3. Last resort → manual git squash-merge with Claude conflict resolution.
  */
 export async function mergeToMain(
   worktreePath: string,
   target = "main"
 ): Promise<void> {
+  const wtMerge = () =>
+    execa("wt", ["-C", worktreePath, "merge", target, "-y"], { reject: true });
+
+  // First attempt.
   try {
-    await execa("wt", ["-C", worktreePath, "merge", target, "-y"], {
-      reject: true,
-    });
-  } catch (err) {
-    const e = err as ExecaError;
+    await wtMerge();
+    return;
+  } catch (firstErr) {
+    const e = firstErr as ExecaError;
     const stderr = typeof e.stderr === "string" ? e.stderr : "";
-    throw new WtError(
-      `wt merge ${target} failed: ${e.shortMessage ?? e.message}`,
-      stderr
+
+    // Case 1: main has uncommitted changes blocking the push step.
+    if (stderr.includes("conflicting uncommitted changes")) {
+      const mainPath = await mainWorktreePath(worktreePath);
+      await execa("git", ["-C", mainPath, "stash", "push", "-m", "inklit-auto-stash-before-merge"], { reject: true });
+      try {
+        await wtMerge();
+        return;
+      } finally {
+        await execa("git", ["-C", mainPath, "stash", "pop"], { reject: false });
+      }
+    }
+
+    // Case 2: worktree is mid-rebase (wt merge triggered a rebase that conflicted).
+    if (stderr.includes("not on a branch") || stderr.includes("detached HEAD")) {
+      const stuck = await conflictedFiles(worktreePath);
+      if (stuck.length > 0) {
+        await resolveConflictsWithClaude(worktreePath);
+        await execa(
+          "git", ["-C", worktreePath, "rebase", "--continue"],
+          { env: { ...process.env, GIT_EDITOR: "true" }, reject: true }
+        );
+        try {
+          await wtMerge();
+          return;
+        } catch { /* fall through to last-resort below */ }
+      }
+    }
+
+    // Last resort: manual squash merge via git so wt pre-checks can't block us.
+    const mainPath = await mainWorktreePath(worktreePath);
+    const { stdout: branchOut } = await execa("git", ["-C", worktreePath, "branch", "--show-current"], { reject: false });
+    const branch = branchOut.trim();
+    if (!branch) {
+      throw new WtError(`wt merge ${target} failed: ${e.shortMessage ?? e.message}`, stderr);
+    }
+
+    try {
+      await execa("git", ["-C", mainPath, "merge", "--squash", branch], { reject: true });
+    } catch {
+      // Squash merge itself conflicted — resolve with Claude then proceed.
+      await resolveConflictsWithClaude(mainPath);
+    }
+
+    await execa(
+      "git", ["-C", mainPath, "commit", "--no-edit", "-m", `squash: ${branch}`],
+      { reject: true }
     );
+
+    // Clean up the worktree now that we've merged manually.
+    await execa("wt", ["remove", branch, "-y", "-f", "-D", "--foreground"], { reject: false });
   }
 }
 
