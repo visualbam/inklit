@@ -452,6 +452,8 @@ export function App({ mainBranch = "main" }) {
     const notifiedIdleRef = useRef(new Set());
     /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
     const closingAllRef = useRef(false);
+    // Cancels the in-flight merge or sync subprocess chain (Esc during merging/syncing).
+    const mergeAbortRef = useRef(null);
     useEffect(() => {
         let cancelled = false;
         void loadUiPrefs()
@@ -958,6 +960,10 @@ export function App({ mainBranch = "main" }) {
             state.mode === "syncing" ||
             state.mode === "killing" ||
             state.mode === "closingAll") {
+            if (key.escape &&
+                (state.mode === "merging" || state.mode === "syncing")) {
+                mergeAbortRef.current?.abort();
+            }
             return;
         }
         if (state.mode === "resuming")
@@ -1444,8 +1450,10 @@ export function App({ mainBranch = "main" }) {
         if (!task)
             return;
         dispatch({ type: "mode/merging" });
+        const controller = new AbortController();
+        mergeAbortRef.current = controller;
         try {
-            await mergeToMain(task.path, targetBranch);
+            await mergeToMain(task.path, targetBranch, controller.signal);
             await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => { });
             const mergedTask = {
                 ...task,
@@ -1477,14 +1485,20 @@ export function App({ mainBranch = "main" }) {
                 message: firstStderrLine ? `${base}: ${firstStderrLine}` : base,
             });
         }
+        finally {
+            if (mergeAbortRef.current === controller)
+                mergeAbortRef.current = null;
+        }
     }
     async function doSync(slug) {
         const task = state.tasks.find((t) => t.slug === slug);
         if (!task)
             return;
         dispatch({ type: "mode/syncing" });
+        const controller = new AbortController();
+        mergeAbortRef.current = controller;
         try {
-            await syncFromMain(task.path, targetBranch);
+            await syncFromMain(task.path, targetBranch, controller.signal);
             dispatch({ type: "mode/list" });
             dispatch({ type: "flash", message: `Synced ${targetBranch} → ${slug}` });
         }
@@ -1499,6 +1513,10 @@ export function App({ mainBranch = "main" }) {
                 type: "error",
                 message: firstStderrLine ? `${base}: ${firstStderrLine}` : base,
             });
+        }
+        finally {
+            if (mergeAbortRef.current === controller)
+                mergeAbortRef.current = null;
         }
     }
     async function doArchiveSelected() {

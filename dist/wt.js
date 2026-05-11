@@ -477,7 +477,12 @@ async function conflictedFiles(repoPath) {
     const { stdout } = await execa("git", ["-C", repoPath, "diff", "--name-only", "--diff-filter=U"], { reject: false });
     return stdout.split("\n").filter(Boolean);
 }
-async function resolveConflicts(repoPath) {
+// Per-file budget for the AI conflict resolvers. Without these, a hung CLI
+// (auth prompt, slow generation, stalled network) would freeze the merge with
+// no way for the user to recover.
+const CLAUDE_RESOLVE_TIMEOUT_MS = 120_000;
+const CODEX_RESOLVE_TIMEOUT_MS = 180_000;
+async function resolveConflicts(repoPath, signal) {
     const files = await conflictedFiles(repoPath);
     if (files.length === 0)
         return;
@@ -486,29 +491,37 @@ async function resolveConflicts(repoPath) {
     for (const file of files) {
         if (claudeFailed)
             break;
+        if (signal?.aborted)
+            throw new Error("Cancelled");
         try {
             const fullPath = path.join(repoPath, file);
             const content = await readFile(fullPath, "utf8");
             const prompt = `Resolve all git conflict markers in this file. Keep the best of both sides. ` +
                 `Return ONLY the resolved file content — no explanation, no markdown, no code fences.\n\n${content}`;
-            const { stdout } = await execa("claude", ["-p", prompt, "--output-format", "text", "--bare"], { reject: true });
+            const { stdout } = await execa("claude", ["-p", prompt, "--output-format", "text", "--bare"], { reject: true, timeout: CLAUDE_RESOLVE_TIMEOUT_MS, cancelSignal: signal });
             await writeFile(fullPath, stdout);
-            await execa("git", ["-C", repoPath, "add", file]);
+            await execa("git", ["-C", repoPath, "add", file], { cancelSignal: signal });
         }
-        catch {
+        catch (err) {
+            if (signal?.aborted)
+                throw err;
             claudeFailed = true;
         }
     }
     if (!claudeFailed)
         return;
+    if (signal?.aborted)
+        throw new Error("Cancelled");
     // Codex fallback: agent edits remaining conflicted files in place.
     const remaining = await conflictedFiles(repoPath);
     if (remaining.length === 0)
         return;
     const prompt = `Resolve all git conflict markers in these files: ${remaining.join(", ")}. ` +
         `Keep the best of both sides for each conflict. Edit the files in place.`;
-    await execa("codex", ["exec", prompt], { cwd: repoPath, reject: true });
-    await execa("git", ["-C", repoPath, "add", ...remaining]);
+    await execa("codex", ["exec", prompt], {
+        cwd: repoPath, reject: true, timeout: CODEX_RESOLVE_TIMEOUT_MS, cancelSignal: signal,
+    });
+    await execa("git", ["-C", repoPath, "add", ...remaining], { cancelSignal: signal });
 }
 /**
  * Squash-merge a worktree's branch into `target` (default `main`) and let
@@ -519,8 +532,18 @@ async function resolveConflicts(repoPath) {
  *     rebase continues, then merge retries.
  *  3. Last resort → manual git squash-merge with Claude conflict resolution.
  */
-export async function mergeToMain(worktreePath, target = "main") {
-    const wtMerge = () => execa("wt", ["-C", worktreePath, "merge", target, "-y"], { reject: true });
+export async function mergeToMain(worktreePath, target = "main", signal) {
+    try {
+        await mergeToMainInner(worktreePath, target, signal);
+    }
+    catch (err) {
+        if (signal?.aborted)
+            throw new WtError("Merge cancelled");
+        throw err;
+    }
+}
+async function mergeToMainInner(worktreePath, target, signal) {
+    const wtMerge = () => execa("wt", ["-C", worktreePath, "merge", target, "-y"], { reject: true, cancelSignal: signal });
     // First attempt.
     try {
         await wtMerge();
@@ -532,7 +555,7 @@ export async function mergeToMain(worktreePath, target = "main") {
         // Case 1: main has uncommitted changes blocking the push step.
         if (stderr.includes("conflicting uncommitted changes")) {
             const mainPath = await mainWorktreePath(worktreePath);
-            await execa("git", ["-C", mainPath, "stash", "push", "-m", "inklit-auto-stash-before-merge"], { reject: true });
+            await execa("git", ["-C", mainPath, "stash", "push", "-m", "inklit-auto-stash-before-merge"], { reject: true, cancelSignal: signal });
             try {
                 await wtMerge();
                 return;
@@ -545,8 +568,8 @@ export async function mergeToMain(worktreePath, target = "main") {
         if (stderr.includes("not on a branch") || stderr.includes("detached HEAD")) {
             const stuck = await conflictedFiles(worktreePath);
             if (stuck.length > 0) {
-                await resolveConflicts(worktreePath);
-                await execa("git", ["-C", worktreePath, "rebase", "--continue"], { env: { ...process.env, GIT_EDITOR: "true" }, reject: true });
+                await resolveConflicts(worktreePath, signal);
+                await execa("git", ["-C", worktreePath, "rebase", "--continue"], { env: { ...process.env, GIT_EDITOR: "true" }, reject: true, cancelSignal: signal });
                 try {
                     await wtMerge();
                     return;
@@ -562,13 +585,13 @@ export async function mergeToMain(worktreePath, target = "main") {
             throw new WtError(`wt merge ${target} failed: ${e.shortMessage ?? e.message}`, stderr);
         }
         try {
-            await execa("git", ["-C", mainPath, "merge", "--squash", branch], { reject: true });
+            await execa("git", ["-C", mainPath, "merge", "--squash", branch], { reject: true, cancelSignal: signal });
         }
         catch {
             // Squash merge itself conflicted — resolve with Claude then proceed.
-            await resolveConflicts(mainPath);
+            await resolveConflicts(mainPath, signal);
         }
-        await execa("git", ["-C", mainPath, "commit", "--no-edit", "-m", `squash: ${branch}`], { reject: true });
+        await execa("git", ["-C", mainPath, "commit", "--no-edit", "-m", `squash: ${branch}`], { reject: true, cancelSignal: signal });
         // Clean up the worktree now that we've merged manually.
         await execa("wt", ["remove", branch, "-y", "-f", "-D", "--foreground"], { reject: false });
     }
@@ -579,25 +602,38 @@ export async function mergeToMain(worktreePath, target = "main") {
  * via Claude until the rebase completes. The rebase is aborted if resolution
  * itself fails, leaving the worktree in its original state.
  */
-export async function syncFromMain(worktreePath, target = "main") {
+export async function syncFromMain(worktreePath, target = "main", signal) {
+    try {
+        await syncFromMainInner(worktreePath, target, signal);
+    }
+    catch (err) {
+        if (signal?.aborted)
+            throw new WtError("Sync cancelled");
+        throw err;
+    }
+}
+async function syncFromMainInner(worktreePath, target, signal) {
     const continueRebase = () => execa("git", ["-C", worktreePath, "rebase", "--continue"], {
         env: { ...process.env, GIT_EDITOR: "true" },
         reject: true,
+        cancelSignal: signal,
     });
     async function resolveAndContinue() {
         const stuck = await conflictedFiles(worktreePath);
         if (stuck.length === 0)
             throw new Error("Rebase failed with no conflicted files");
-        await resolveConflicts(worktreePath);
+        await resolveConflicts(worktreePath, signal);
         try {
             await continueRebase();
         }
         catch {
+            if (signal?.aborted)
+                throw new Error("Cancelled");
             await resolveAndContinue();
         }
     }
     try {
-        await execa("git", ["-C", worktreePath, "rebase", target], { reject: true });
+        await execa("git", ["-C", worktreePath, "rebase", target], { reject: true, cancelSignal: signal });
     }
     catch (err) {
         const e = err;
