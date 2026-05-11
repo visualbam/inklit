@@ -15,6 +15,7 @@ import { SendInputPrompt } from "./SendInputPrompt.js";
 import { FilterPrompt } from "./FilterPrompt.js";
 import { HelpOverlay } from "./HelpOverlay.js";
 import { CommandPalette } from "./CommandPalette.js";
+import { agentTranscriptTail } from "./agentTranscript.js";
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
 import {
@@ -601,8 +602,7 @@ function isLivePane(s: TaskState): boolean {
 }
 
 function screenTail(text: string): string {
-  const lines = text.split("\n");
-  return lines.slice(-AGENT_TAIL_LINES).join("\n");
+  return agentTranscriptTail(text, AGENT_TAIL_LINES);
 }
 
 /**
