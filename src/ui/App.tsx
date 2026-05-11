@@ -641,6 +641,8 @@ export function App() {
   const screenHashRef = useRef<Map<string, { hash: string; sinceMs: number }>>(
     new Map()
   );
+  /** Slugs already notified as idle this episode; cleared on waiting/ready/failed. */
+  const notifiedIdleRef = useRef(new Set<string>());
   /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
   const closingAllRef = useRef(false);
 
@@ -792,6 +794,9 @@ export function App() {
         for (const slug of [...screenCacheRef.current.keys()]) {
           if (!aliveSlugs.has(slug)) screenCacheRef.current.delete(slug);
         }
+        for (const slug of [...notifiedIdleRef.current]) {
+          if (!aliveSlugs.has(slug)) notifiedIdleRef.current.delete(slug);
+        }
 
         // Attach cached review stats and keep recently-applied tasks visible
         // briefly so the board acknowledges the completed action instead of
@@ -833,12 +838,18 @@ export function App() {
           const prev = prevStatesRef.current.get(t.slug);
           if (!prev || prev === t.state) continue;
           if (t.state === "waiting") {
+            notifiedIdleRef.current.delete(t.slug);
             notify("inklit", `${t.slug} is waiting for input`);
           } else if (t.state === "idle") {
-            notify("inklit", `${t.slug} stopped — review when ready`);
+            if (!notifiedIdleRef.current.has(t.slug)) {
+              notifiedIdleRef.current.add(t.slug);
+              notify("inklit", `${t.slug} stopped — review when ready`);
+            }
           } else if (t.state === "ready") {
+            notifiedIdleRef.current.delete(t.slug);
             notify("inklit", `${t.slug} is ready for review`, { sound: "" });
           } else if (t.state === "failed") {
+            notifiedIdleRef.current.delete(t.slug);
             notify("inklit", `${t.slug} failed`, { sound: "Basso" });
           }
         }
@@ -1103,6 +1114,13 @@ export function App() {
     const id = setTimeout(() => dispatch({ type: "flash", message: null }), 2000);
     return () => clearTimeout(id);
   }, [state.flash]);
+
+  // Error auto-clear.
+  useEffect(() => {
+    if (!state.error) return;
+    const id = setTimeout(() => dispatch({ type: "error", message: null }), 8000);
+    return () => clearTimeout(id);
+  }, [state.error]);
 
   useInput(
     (input, key) => {
