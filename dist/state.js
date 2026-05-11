@@ -1,0 +1,181 @@
+import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+function statePath() {
+    // Per XDG Base Directory: $XDG_STATE_HOME defaults to $HOME/.local/state.
+    const base = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+    return join(base, "inklit", "tasks.json");
+}
+async function readFile() {
+    try {
+        const raw = await fs.readFile(statePath(), "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed.version === 1 &&
+            parsed.tasks &&
+            typeof parsed.tasks === "object" &&
+            !Array.isArray(parsed.tasks)) {
+            return parsed;
+        }
+    }
+    catch (err) {
+        // Missing file or invalid JSON → treat as fresh state. We never throw
+        // from here because state is best-effort: inklit must work the first
+        // time you run it before the file exists.
+        if (err?.code !== "ENOENT") {
+            // Corrupt file — log to stderr but proceed.
+            // eslint-disable-next-line no-console
+            console.error(`inklit: state file unreadable, starting fresh: ${err}`);
+        }
+    }
+    return { version: 1, tasks: {} };
+}
+async function writeFile(state) {
+    const path = statePath();
+    const dir = dirname(path);
+    const tmpPath = join(dir, `.tasks-${process.pid}-${Date.now()}-${randomUUID()}.json.tmp`);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(tmpPath, JSON.stringify(state, null, 2), "utf-8");
+    try {
+        await fs.rename(tmpPath, path);
+    }
+    catch (err) {
+        await fs.unlink(tmpPath).catch(() => { });
+        throw err;
+    }
+}
+async function withState(mutate) {
+    const state = await readFile();
+    const result = await mutate(state);
+    if (result === false)
+        return;
+    await writeFile(state);
+}
+/** Record that we spawned `slug` with `agent`. Idempotent. */
+export async function recordSpawn(slug, agent, paneId) {
+    const now = Date.now();
+    await withState((state) => {
+        state.tasks[slug] = {
+            agent,
+            spawnedAt: state.tasks[slug]?.spawnedAt ?? now,
+            paneId: paneId ?? state.tasks[slug]?.paneId,
+            lifecycle: "active",
+            lifecycleAt: now,
+        };
+    });
+}
+/** Touch the task's lastResumedAt. Creates the entry if missing. */
+export async function recordResume(slug, agent, paneId) {
+    const now = Date.now();
+    await withState((state) => {
+        const existing = state.tasks[slug] ?? { spawnedAt: now };
+        state.tasks[slug] = {
+            agent,
+            spawnedAt: existing.spawnedAt,
+            lastResumedAt: now,
+            paneId: paneId ?? existing.paneId,
+            lifecycle: "active",
+            lifecycleAt: now,
+        };
+    });
+}
+/** Persist an explicit lifecycle marker. `null` clears the override. */
+export async function recordLifecycle(slug, lifecycle, snapshot) {
+    const now = Date.now();
+    await withState((state) => {
+        const existing = state.tasks[slug] ?? { spawnedAt: now };
+        if (lifecycle === null) {
+            state.tasks[slug] = {
+                ...existing,
+                lifecycle: undefined,
+                lifecycleAt: undefined,
+                snapshot: undefined,
+            };
+            return;
+        }
+        state.tasks[slug] = {
+            ...existing,
+            lifecycle,
+            lifecycleAt: now,
+            snapshot: snapshot ?? existing.snapshot,
+        };
+    });
+}
+export function snapshotTask(task) {
+    return {
+        path: task.path,
+        shortSha: task.shortSha,
+        subject: task.subject,
+        ageSeconds: task.ageSeconds,
+        dirty: task.dirty,
+        symbols: task.symbols,
+        review: task.review,
+    };
+}
+/** Persist dashboard-level UI preferences. */
+export async function recordListDensity(listDensity) {
+    await withState((state) => {
+        state.ui = {
+            ...state.ui,
+            listDensity,
+        };
+    });
+}
+export async function loadUiPrefs() {
+    const state = await readFile();
+    return {
+        listDensity: isListDensity(state.ui?.listDensity)
+            ? state.ui.listDensity
+            : undefined,
+    };
+}
+/**
+ * Adopt a paneId for a slug discovered via title-based lookup. Used as a
+ * one-shot upgrade for legacy tasks (spawned before paneId tracking) when
+ * the poll loop happens to catch the pane before its title is rewritten.
+ * No-op if the slug isn't already tracked or already has the same paneId.
+ */
+export async function recordPane(slug, paneId) {
+    await withState((state) => {
+        const existing = state.tasks[slug];
+        if (!existing)
+            return false;
+        if (existing.paneId === paneId)
+            return false;
+        state.tasks[slug] = { ...existing, paneId };
+    });
+}
+/**
+ * Drop a stale paneId (the pane is gone — agent exited or was closed).
+ * Keeps the task record so resume still knows the agent kind.
+ */
+export async function clearPane(slug) {
+    await withState((state) => {
+        const existing = state.tasks[slug];
+        if (!existing || !existing.paneId)
+            return false;
+        state.tasks[slug] = { ...existing, paneId: undefined };
+    });
+}
+/** Drop a task entry (e.g. after `X` kill succeeds). Best-effort. */
+export async function recordRemove(slug) {
+    await withState((state) => {
+        if (!(slug in state.tasks))
+            return false;
+        delete state.tasks[slug];
+    });
+}
+/** Look up the agent kind we recorded for `slug`. Returns null when unknown. */
+export async function getAgent(slug) {
+    const state = await readFile();
+    return state.tasks[slug]?.agent ?? null;
+}
+/** Read the entire map at once (used by App for batched lookups). */
+export async function loadAll() {
+    const state = await readFile();
+    return state.tasks;
+}
+function isListDensity(value) {
+    return value === "detailed" || value === "compact";
+}
+//# sourceMappingURL=state.js.map
