@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useReducer, useRef } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { createHash } from "node:crypto";
-import { TaskList } from "./List.js";
+import { TaskList, taskListLineCount } from "./List.js";
 import { Inspector } from "./Inspector.js";
 import { MainVersionBar } from "./MainVersionBar.js";
 import { StatusBar } from "./StatusBar.js";
@@ -10,6 +10,7 @@ import { ConfirmPrompt } from "./ConfirmPrompt.js";
 import { SendInputPrompt } from "./SendInputPrompt.js";
 import { FilterPrompt } from "./FilterPrompt.js";
 import { HelpOverlay } from "./HelpOverlay.js";
+import { CommandPalette } from "./CommandPalette.js";
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
 import {
@@ -36,7 +37,16 @@ import {
   panesSnapshot,
 } from "../zellij.js";
 import { spawnAgent, resumeAgent } from "../agent.js";
-import { getAgent, loadAll, recordPane, clearPane, recordRemove } from "../state.js";
+import {
+  getAgent,
+  loadAll,
+  recordPane,
+  clearPane,
+  recordRemove,
+  recordLifecycle,
+  snapshotTask,
+  type TaskRecord,
+} from "../state.js";
 import { notify } from "../notify.js";
 import type {
   AgentKind,
@@ -45,6 +55,7 @@ import type {
   MainVersion,
   ReviewStats,
   Task,
+  TaskLifecycle,
   TaskState,
 } from "../model.js";
 import { initialState, lifecycleForTask } from "../model.js";
@@ -92,12 +103,16 @@ type Action =
   | { type: "mode/sendInput" }
   | { type: "mode/sending" }
   | { type: "mode/filter" }
+  | { type: "mode/commandPalette" }
   | { type: "mode/help" }
+  | { type: "list/toggleDensity" }
+  | { type: "archive/toggleVisibility" }
   | { type: "sendInput/setValue"; value: string }
   | { type: "filter/set"; value: string }
   | { type: "filter/clear" }
   | { type: "task/reviewStats"; slug: string; stats: ReviewStats }
   | { type: "task/merged"; slug: string; task: Task }
+  | { type: "task/lifecycle"; slug: string; lifecycle: TaskLifecycle | undefined; lifecycleAt?: number }
   | { type: "flash"; message: string | null }
   | { type: "error"; message: string | null }
   | { type: "chord/set"; key: string | null };
@@ -145,7 +160,9 @@ function sortTasks(tasks: Task[]): Task[] {
   });
 }
 
-function urgencyRank(task: Pick<Task, "state">): number {
+function urgencyRank(task: Pick<Task, "state"> & { lifecycle?: TaskLifecycle }): number {
+  if (task.lifecycle === "cancelled") return 6;
+  if (task.lifecycle === "archived") return 7;
   switch (task.state) {
     case "waiting":
       return 0;
@@ -178,23 +195,42 @@ function matchesFilter(task: Task, query: string): boolean {
   return haystack.includes(q);
 }
 
-function visibleTasksFor(tasks: Task[], query: string): Task[] {
-  return sortTasks(tasks).filter((task) => matchesFilter(task, query));
+function isHiddenLifecycle(task: Task): boolean {
+  return task.lifecycle === "archived" || task.lifecycle === "cancelled";
 }
 
-function firstVisibleSlug(tasks: Task[], query: string): string | null {
-  return visibleTasksFor(tasks, query)[0]?.slug ?? null;
+function visibleTasksFor(
+  tasks: Task[],
+  query: string,
+  showArchived: boolean
+): Task[] {
+  return sortTasks(tasks).filter(
+    (task) =>
+      (showArchived || !isHiddenLifecycle(task)) && matchesFilter(task, query)
+  );
+}
+
+function firstVisibleSlug(
+  tasks: Task[],
+  query: string,
+  showArchived: boolean
+): string | null {
+  return visibleTasksFor(tasks, query, showArchived)[0]?.slug ?? null;
 }
 
 function keepVisibleSelection(
   selectedSlug: string | null,
   tasks: Task[],
-  query: string
+  query: string,
+  showArchived: boolean
 ): string | null {
-  if (selectedSlug && visibleTasksFor(tasks, query).some((t) => t.slug === selectedSlug)) {
+  if (
+    selectedSlug &&
+    visibleTasksFor(tasks, query, showArchived).some((t) => t.slug === selectedSlug)
+  ) {
     return selectedSlug;
   }
-  return firstVisibleSlug(tasks, query);
+  return firstVisibleSlug(tasks, query, showArchived);
 }
 
 /** Total renderable units (lines or file rows) in the current inspector view. */
@@ -203,7 +239,7 @@ function totalLinesFor(s: RenderState): number {
   if (!slug) return 0;
   if (s.inspectorMode === "task") {
     const task = s.tasks.find((t) => t.slug === slug) ?? null;
-    return 7 + suggestedFollowUps(task).length;
+    return 9 + suggestedFollowUps(task).length;
   }
   const c = s.content.get(slug);
   if (!c) return 0;
@@ -244,7 +280,12 @@ function reducer(s: RenderState, a: Action): RenderState {
     case "tasks/loaded": {
       const tasks = sortTasks(a.tasks);
       let selectedSlug = s.selectedSlug;
-      selectedSlug = keepVisibleSelection(selectedSlug, tasks, s.filterQuery);
+      selectedSlug = keepVisibleSelection(
+        selectedSlug,
+        tasks,
+        s.filterQuery,
+        s.showArchived
+      );
       return {
         ...s,
         mainVersion: a.mainVersion,
@@ -257,13 +298,13 @@ function reducer(s: RenderState, a: Action): RenderState {
     case "tasks/error":
       return { ...s, error: a.message };
     case "select/next": {
-      const visible = visibleTasksFor(s.tasks, s.filterQuery);
+      const visible = visibleTasksFor(s.tasks, s.filterQuery, s.showArchived);
       const idx = visible.findIndex((t) => t.slug === s.selectedSlug);
       const next = visible[Math.min(visible.length - 1, idx + 1)] ?? visible[0];
       return { ...s, selectedSlug: next?.slug ?? null };
     }
     case "select/prev": {
-      const visible = visibleTasksFor(s.tasks, s.filterQuery);
+      const visible = visibleTasksFor(s.tasks, s.filterQuery, s.showArchived);
       const idx = visible.findIndex((t) => t.slug === s.selectedSlug);
       const prev = visible[Math.max(0, idx - 1)] ?? visible[0];
       return { ...s, selectedSlug: prev?.slug ?? null };
@@ -271,11 +312,11 @@ function reducer(s: RenderState, a: Action): RenderState {
     case "select/first":
       return {
         ...s,
-        selectedSlug: firstVisibleSlug(s.tasks, s.filterQuery),
+        selectedSlug: firstVisibleSlug(s.tasks, s.filterQuery, s.showArchived),
       };
     case "select/last":
       {
-        const visible = visibleTasksFor(s.tasks, s.filterQuery);
+        const visible = visibleTasksFor(s.tasks, s.filterQuery, s.showArchived);
         return {
           ...s,
           selectedSlug: visible[visible.length - 1]?.slug ?? null,
@@ -333,8 +374,26 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, mode: "sending" };
     case "mode/filter":
       return { ...s, mode: "filter" };
+    case "mode/commandPalette":
+      return { ...s, mode: "commandPalette" };
     case "mode/help":
       return { ...s, mode: "help" };
+    case "list/toggleDensity":
+      return {
+        ...s,
+        listDensity: s.listDensity === "compact" ? "detailed" : "compact",
+      };
+    case "archive/toggleVisibility":
+      return {
+        ...s,
+        showArchived: !s.showArchived,
+        selectedSlug: keepVisibleSelection(
+          s.selectedSlug,
+          s.tasks,
+          s.filterQuery,
+          !s.showArchived
+        ),
+      };
     case "sendInput/setValue":
       return { ...s, sendInputValue: a.value };
     case "filter/set": {
@@ -342,14 +401,24 @@ function reducer(s: RenderState, a: Action): RenderState {
       return {
         ...s,
         filterQuery: query,
-        selectedSlug: keepVisibleSelection(s.selectedSlug, s.tasks, query),
+        selectedSlug: keepVisibleSelection(
+          s.selectedSlug,
+          s.tasks,
+          query,
+          s.showArchived
+        ),
       };
     }
     case "filter/clear":
       return {
         ...s,
         filterQuery: "",
-        selectedSlug: keepVisibleSelection(s.selectedSlug, s.tasks, ""),
+        selectedSlug: keepVisibleSelection(
+          s.selectedSlug,
+          s.tasks,
+          "",
+          s.showArchived
+        ),
       };
     case "task/reviewStats": {
       const tasks = s.tasks.map((t) =>
@@ -365,7 +434,31 @@ function reducer(s: RenderState, a: Action): RenderState {
         ...s,
         tasks,
         inspectorMode: "task",
-        selectedSlug: keepVisibleSelection(s.selectedSlug, tasks, s.filterQuery),
+        selectedSlug: keepVisibleSelection(
+          s.selectedSlug,
+          tasks,
+          s.filterQuery,
+          s.showArchived
+        ),
+      };
+    }
+    case "task/lifecycle": {
+      const tasks = sortTasks(
+        s.tasks.map((t) =>
+          t.slug === a.slug
+            ? { ...t, lifecycle: a.lifecycle, lifecycleAt: a.lifecycleAt }
+            : t
+        )
+      );
+      return {
+        ...s,
+        tasks,
+        selectedSlug: keepVisibleSelection(
+          s.selectedSlug,
+          tasks,
+          s.filterQuery,
+          s.showArchived
+        ),
       };
     }
     case "inspector/setMode": {
@@ -447,6 +540,45 @@ interface ReviewStatsCacheEntry {
 interface CompletedTaskEntry {
   task: Task;
   untilMs: number;
+}
+
+function completedTaskFromRecord(
+  slug: string,
+  record: TaskRecord,
+  now: number
+): Task | null {
+  if (record.lifecycle !== "done" || !record.lifecycleAt || !record.snapshot) {
+    return null;
+  }
+  if (now - record.lifecycleAt > MERGED_FADE_MS) return null;
+  return {
+    slug,
+    path: record.snapshot.path,
+    shortSha: record.snapshot.shortSha,
+    subject: record.snapshot.subject,
+    ageSeconds: Math.max(0, Math.floor((now - record.lifecycleAt) / 1000)),
+    state: "merged",
+    lifecycle: "done",
+    lifecycleAt: record.lifecycleAt,
+    dirty: false,
+    review: record.snapshot.review ?? {
+      files: 0,
+      commitsAhead: 0,
+      untracked: 0,
+    },
+    symbols: record.snapshot.symbols,
+  };
+}
+
+function applyPersistedLifecycle(task: Task, record?: TaskRecord): Task {
+  if (record?.lifecycle === "archived" || record?.lifecycle === "cancelled") {
+    return {
+      ...task,
+      lifecycle: record.lifecycle,
+      lifecycleAt: record.lifecycleAt,
+    };
+  }
+  return task;
 }
 
 /**
@@ -544,7 +676,8 @@ export function App() {
         const refined = await Promise.all(
           tasks.map(async (t) => {
             try {
-              const recordedPaneId = records[t.slug]?.paneId;
+              const record = records[t.slug];
+              const recordedPaneId = record?.paneId;
               // Primary: match by cwd. This is the only identifier that
               // survives both OSC title rewrites (claude-code) and pane id
               // churn (user closes pane and respawns). Worktree paths are
@@ -569,17 +702,23 @@ export function App() {
               }
               if (!pane) {
                 if (recordedPaneId) dropped.push(t.slug);
-                return { ...t, state: "ready" as const, paneId: undefined };
+                return applyPersistedLifecycle(
+                  { ...t, state: "ready" as const, paneId: undefined },
+                  record
+                );
               }
               const paneId = pane.paneId;
               const cached = screenCacheRef.current.get(t.slug);
               const screen = cached && cached.paneId === paneId ? cached.screen : "";
               const waiting = screen ? detectWaiting(screen) : false;
-              return {
-                ...t,
-                state: waiting ? ("waiting" as const) : ("running" as const),
-                paneId,
-              };
+              return applyPersistedLifecycle(
+                {
+                  ...t,
+                  state: waiting ? ("waiting" as const) : ("running" as const),
+                  paneId,
+                },
+                record
+              );
             } catch {
               return t;
             }
@@ -650,6 +789,13 @@ export function App() {
           finalTasks.push(entry.task);
           boardSlugs.add(slug);
         }
+        for (const [slug, record] of Object.entries(records)) {
+          if (boardSlugs.has(slug)) continue;
+          const completed = completedTaskFromRecord(slug, record, Date.now());
+          if (!completed) continue;
+          finalTasks.push(completed);
+          boardSlugs.add(slug);
+        }
         for (const slug of [...reviewStatsRef.current.keys()]) {
           if (!boardSlugs.has(slug)) reviewStatsRef.current.delete(slug);
         }
@@ -657,13 +803,17 @@ export function App() {
         // Transition-based desktop notifications. Only fire when we've seen
         // the slug before (so freshly-loaded tasks don't pop on startup) and
         // the state actually changed. Keep the trigger list intentionally
-        // narrow — `running → waiting` is the "come back, the agent needs
-        // you" signal that justifies pulling the user out of their editor.
+        // narrow: waiting/ready/failed are the states that justify pulling the
+        // user back from their editor.
         for (const t of finalTasks) {
           const prev = prevStatesRef.current.get(t.slug);
           if (!prev || prev === t.state) continue;
           if (t.state === "waiting") {
             notify("lazyagent", `${t.slug} is waiting for input`);
+          } else if (t.state === "ready") {
+            notify("lazyagent", `${t.slug} is ready for review`, { sound: "" });
+          } else if (t.state === "failed") {
+            notify("lazyagent", `${t.slug} failed`, { sound: "Basso" });
           }
         }
         const nextStates = new Map<string, TaskState>();
@@ -978,6 +1128,16 @@ export function App() {
         }
         return;
       }
+      if (state.mode === "commandPalette") {
+        if (key.escape || input === ":") {
+          dispatch({ type: "mode/list" });
+          return;
+        }
+        const command = key.return ? "enter" : input;
+        if (command && runPaletteCommand(command)) return;
+        dispatch({ type: "flash", message: `Unknown command: ${command}` });
+        return;
+      }
 
       if (state.mode === "resumeAgentPicker") {
         if (key.escape) dispatch({ type: "mode/list" });
@@ -1058,10 +1218,20 @@ export function App() {
         dispatch({ type: "mode/filter" });
         return;
       }
+      if (input === ":") {
+        dispatch({ type: "mode/commandPalette" });
+        return;
+      }
       if (input === "r") {
-        fetchedRef.current.clear();
-        dispatch({ type: "flash", message: "Refreshing task board…" });
-        refreshProjectRef.current();
+        refreshBoard();
+        return;
+      }
+      if (input === "v") {
+        toggleDensity();
+        return;
+      }
+      if (input === "z") {
+        toggleArchivedVisibility();
         return;
       }
       // Lowercase j/k + arrows still drive the list selection.
@@ -1128,14 +1298,7 @@ export function App() {
         return;
       }
       if (input === "n") {
-        if (!inSess) {
-          dispatch({
-            type: "flash",
-            message: "Not in zellij — launch lazyagent inside a zellij session.",
-          });
-          return;
-        }
-        dispatch({ type: "mode/newTaskDescription" });
+        requestNewTask();
         return;
       }
       if (input === "T" || input === "1" || input === "2") {
@@ -1143,38 +1306,7 @@ export function App() {
         return;
       }
       if (key.return) {
-        const slug = state.selectedSlug;
-        if (!slug) return;
-        if (!inSess) {
-          dispatch({
-            type: "flash",
-            message: "Not in zellij — focus/resume disabled.",
-          });
-          return;
-        }
-        const task = state.tasks.find((t) => t.slug === slug);
-        if (task?.state === "merged") {
-          dispatch({ type: "flash", message: `${slug} is already applied.` });
-          return;
-        }
-        // Live pane → focus. Otherwise → resume (start a new pane in the
-        // existing worktree with the agent's resume flag).
-        if (task && isLivePane(task.state)) {
-          // Prefer focus-by-id; falls back to focus-by-name only when the
-          // poll loop hasn't established a paneId yet (legacy slugs).
-          const focusP = task.paneId
-            ? focusPaneId(task.paneId)
-            : focusPaneByName(slug);
-          focusP.then((ok) => {
-            if (!ok) {
-              // Pane state changed between poll and keystroke — fall through
-              // to resume.
-              void enterResume(slug);
-            }
-          });
-        } else {
-          void enterResume(slug);
-        }
+        requestFocusOrResume();
         return;
       }
 
@@ -1201,50 +1333,19 @@ export function App() {
       }
 
       if (input === "m") {
-        if (!state.selectedSlug) return;
-        const task = state.tasks.find((t) => t.slug === state.selectedSlug);
-        if (task?.state === "merged") {
-          dispatch({
-            type: "flash",
-            message: `${state.selectedSlug} is already applied.`,
-          });
-          return;
-        }
-        dispatch({ type: "mode/confirmMerge" });
+        requestApplySelected();
         return;
       }
       if (input === "X") {
-        if (!state.selectedSlug) return;
-        const task = state.tasks.find((t) => t.slug === state.selectedSlug);
-        if (task?.state === "merged") {
-          dispatch({
-            type: "flash",
-            message: `${state.selectedSlug} is already applied.`,
-          });
-          return;
-        }
-        dispatch({ type: "mode/confirmKill" });
+        requestKillSelected();
+        return;
+      }
+      if (input === "A") {
+        void doArchiveSelected();
         return;
       }
       if (input === "i") {
-        const slug = state.selectedSlug;
-        if (!slug) return;
-        if (!inSess) {
-          dispatch({
-            type: "flash",
-            message: "Not in zellij — send disabled.",
-          });
-          return;
-        }
-        const t = state.tasks.find((x) => x.slug === slug);
-        if (!t || !isLivePane(t.state)) {
-          dispatch({
-            type: "flash",
-            message: `Cannot send: ${slug} has no live pane.`,
-          });
-          return;
-        }
-        dispatch({ type: "mode/sendInput" });
+        requestSendSelected();
         return;
       }
 
@@ -1256,7 +1357,11 @@ export function App() {
     { isActive: true }
   );
 
-  const visibleTasks = visibleTasksFor(state.tasks, state.filterQuery);
+  const visibleTasks = visibleTasksFor(
+    state.tasks,
+    state.filterQuery,
+    state.showArchived
+  );
   const selectedTask =
     state.tasks.find((t) => t.slug === state.selectedSlug) ?? null;
 
@@ -1278,6 +1383,151 @@ export function App() {
       return;
     }
     dispatch({ type: "mode/newTaskAgent", description: followUp.prompt });
+  }
+
+  function refreshBoard() {
+    fetchedRef.current.clear();
+    dispatch({ type: "flash", message: "Refreshing task board…" });
+    refreshProjectRef.current();
+  }
+
+  function toggleDensity() {
+    const next = state.listDensity === "compact" ? "detailed" : "compact";
+    dispatch({ type: "list/toggleDensity" });
+    dispatch({ type: "flash", message: `Task board: ${next}` });
+  }
+
+  function toggleArchivedVisibility() {
+    const next = !state.showArchived;
+    dispatch({ type: "archive/toggleVisibility" });
+    dispatch({
+      type: "flash",
+      message: next ? "Showing archived tasks." : "Hiding archived tasks.",
+    });
+  }
+
+  function requestNewTask() {
+    if (!inSess) {
+      dispatch({
+        type: "flash",
+        message: "Not in zellij - launch lazyagent inside a zellij session.",
+      });
+      return;
+    }
+    dispatch({ type: "mode/newTaskDescription" });
+  }
+
+  function requestFocusOrResume() {
+    const slug = state.selectedSlug;
+    if (!slug) return;
+    if (!inSess) {
+      dispatch({
+        type: "flash",
+        message: "Not in zellij - focus/resume disabled.",
+      });
+      return;
+    }
+    const task = state.tasks.find((t) => t.slug === slug);
+    if (task?.state === "merged") {
+      dispatch({ type: "flash", message: `${slug} is already applied.` });
+      return;
+    }
+    if (task && isLivePane(task.state)) {
+      const focusP = task.paneId ? focusPaneId(task.paneId) : focusPaneByName(slug);
+      focusP.then((ok) => {
+        if (!ok) void enterResume(slug);
+      });
+    } else {
+      void enterResume(slug);
+    }
+  }
+
+  function requestApplySelected() {
+    if (!state.selectedSlug) return;
+    const task = state.tasks.find((t) => t.slug === state.selectedSlug);
+    if (task?.state === "merged") {
+      dispatch({
+        type: "flash",
+        message: `${state.selectedSlug} is already applied.`,
+      });
+      return;
+    }
+    dispatch({ type: "mode/confirmMerge" });
+  }
+
+  function requestKillSelected() {
+    if (!state.selectedSlug) return;
+    const task = state.tasks.find((t) => t.slug === state.selectedSlug);
+    if (task?.state === "merged") {
+      dispatch({
+        type: "flash",
+        message: `${state.selectedSlug} is already applied.`,
+      });
+      return;
+    }
+    dispatch({ type: "mode/confirmKill" });
+  }
+
+  function requestSendSelected() {
+    const slug = state.selectedSlug;
+    if (!slug) return;
+    if (!inSess) {
+      dispatch({
+        type: "flash",
+        message: "Not in zellij - send disabled.",
+      });
+      return;
+    }
+    const task = state.tasks.find((t) => t.slug === slug);
+    if (!task || !isLivePane(task.state)) {
+      dispatch({
+        type: "flash",
+        message: `Cannot send: ${slug} has no live pane.`,
+      });
+      return;
+    }
+    dispatch({ type: "mode/sendInput" });
+  }
+
+  function runPaletteCommand(input: string): boolean {
+    if (input === "n") requestNewTask();
+    else if (input === "r") {
+      dispatch({ type: "mode/list" });
+      refreshBoard();
+    } else if (input === "/") dispatch({ type: "mode/filter" });
+    else if (input === "v") {
+      dispatch({ type: "mode/list" });
+      toggleDensity();
+    } else if (input === "z") {
+      dispatch({ type: "mode/list" });
+      toggleArchivedVisibility();
+    } else if (input === "enter") {
+      dispatch({ type: "mode/list" });
+      requestFocusOrResume();
+    } else if (input === "i") requestSendSelected();
+    else if (input === "m") requestApplySelected();
+    else if (input === "X") requestKillSelected();
+    else if (input === "A") void doArchiveSelected();
+    else if (input === "T" || input === "1") startFollowUp(0);
+    else if (input === "2") startFollowUp(1);
+    else if (input === "t") {
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "inspector/setMode", mode: "task" });
+    } else if (input === "f") {
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "inspector/setMode", mode: "files" });
+    } else if (input === "d") {
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "inspector/setMode", mode: "diff" });
+    } else if (input === "l") {
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "inspector/setMode", mode: "log" });
+    } else if (input === "a") {
+      dispatch({ type: "mode/list" });
+      dispatch({ type: "inspector/setMode", mode: "agent" });
+    } else if (input === "?") dispatch({ type: "mode/help" });
+    else return false;
+    return true;
   }
 
   /**
@@ -1319,9 +1569,12 @@ export function App() {
     dispatch({ type: "mode/merging" });
     try {
       await mergeToMain(task.path);
+      await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => {});
       const mergedTask: Task = {
         ...task,
         state: "merged",
+        lifecycle: "done",
+        lifecycleAt: Date.now(),
         paneId: undefined,
         dirty: false,
         review: { files: 0, commitsAhead: 0, untracked: 0 },
@@ -1334,6 +1587,47 @@ export function App() {
       dispatch({ type: "task/merged", slug, task: mergedTask });
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Applied ${slug} → main` });
+    } catch (err) {
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function doArchiveSelected() {
+    const slug = state.selectedSlug;
+    if (!slug) return;
+    const task = state.tasks.find((t) => t.slug === slug);
+    if (!task) return;
+    const archived = lifecycleForTask(task) === "archived";
+    if (!archived && isLivePane(task.state)) {
+      dispatch({
+        type: "flash",
+        message: "Archive is only available after a task is ready, failed, or applied.",
+      });
+      return;
+    }
+    const nextLifecycle: TaskLifecycle | null = archived ? null : "archived";
+    const lifecycleAt = Date.now();
+    try {
+      await recordLifecycle(
+        slug,
+        nextLifecycle,
+        nextLifecycle ? snapshotTask(task) : undefined
+      );
+      dispatch({
+        type: "task/lifecycle",
+        slug,
+        lifecycle: nextLifecycle ?? undefined,
+        lifecycleAt: nextLifecycle ? lifecycleAt : undefined,
+      });
+      dispatch({ type: "mode/list" });
+      dispatch({
+        type: "flash",
+        message: archived ? `Restored ${slug}` : `Archived ${slug}`,
+      });
     } catch (err) {
       dispatch({ type: "mode/list" });
       dispatch({
@@ -1509,7 +1803,18 @@ export function App() {
 
   const listHeight = Math.max(
     4,
-    Math.min(Math.max(4, visibleTasks.length + 2), Math.floor(rows / 3))
+    Math.min(
+      Math.max(
+        4,
+        taskListLineCount(
+          visibleTasks,
+          state.tasks.length,
+          state.filterQuery,
+          state.listDensity
+        )
+      ),
+      Math.floor(rows * (state.listDensity === "compact" ? 0.42 : 0.34))
+    )
   );
   const showConfirm =
     state.mode === "confirmMerge" ||
@@ -1556,6 +1861,8 @@ export function App() {
           inSession={inSess}
           filterQuery={state.filterQuery}
           visibleTaskCount={visibleTasks.length}
+          density={state.listDensity}
+          showArchived={state.showArchived}
           width={cols - 2}
         />
       </Box>
@@ -1577,6 +1884,7 @@ export function App() {
           selectedSlug={state.selectedSlug}
           totalTasks={state.tasks.length}
           filterQuery={state.filterQuery}
+          density={state.listDensity}
           width={cols - 2}
         />
       </Box>
@@ -1616,6 +1924,15 @@ export function App() {
           <Box paddingX={1}>
             <Text color="yellow">closing live agent panes…</Text>
           </Box>
+        ) : state.mode === "commandPalette" ? (
+          <CommandPalette
+            selectedTask={selectedTask}
+            density={state.listDensity}
+            showArchived={state.showArchived}
+            inSession={inSess}
+            height={inspectorHeight}
+            width={cols - 4}
+          />
         ) : (
           <Inspector
             task={selectedTask}
@@ -1695,6 +2012,8 @@ export function App() {
         inSession={inSess}
         filterQuery={state.filterQuery}
         visibleTaskCount={visibleTasks.length}
+        density={state.listDensity}
+        showArchived={state.showArchived}
         width={cols - 2}
       />
     </Box>

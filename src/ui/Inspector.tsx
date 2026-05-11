@@ -12,6 +12,7 @@ import {
 } from "./icons.js";
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
+import { reviewSentence, reviewSummary } from "./review.js";
 
 interface Props {
   task: Task | null;
@@ -169,7 +170,9 @@ function TaskOverview({
       `${LIFECYCLE_LABEL[lifecycleForTask(task)]} task, ${paneSummary(task)}`,
     ],
     ["Next", nextAction(task)],
-    ["Review", "Open files/diff/log, then apply to main with m or discard with X."],
+    ["Readiness", reviewSentence(task)],
+    ["Signals", reviewSummary(task)],
+    ["Controls", "Open files/diff/log, then apply with m or discard with X."],
     [
       "Thread",
       task.paneId
@@ -198,9 +201,14 @@ function TaskOverview({
       `2: ${followUps[1].title} - ${followUps[1].detail}`,
     ]);
   }
-  const { visible, above, below } = windowWithMarkers(rows, maxLines, offset);
+  const { visible, above, below } = windowWithMarkers(
+    rows,
+    Math.max(1, maxLines - 1),
+    offset
+  );
   return (
     <Box flexDirection="column">
+      <TaskTimeline task={task} />
       {above > 0 ? (
         <Box>
           <Text dimColor>↑ {above} hidden above</Text>
@@ -209,13 +217,47 @@ function TaskOverview({
       {visible.map(([label, value]) => (
         <Box key={`${label}:${value}`}>
           <Text color={UI.accent}>{padRight(label, 10)}</Text>
-          <Text>{truncate(value, width - 12)}</Text>
+          <Text>{padRight(truncate(value, width - 12), width - 12)}</Text>
         </Box>
       ))}
       {below > 0 ? (
         <Box>
           <Text dimColor>↓ {below} hidden below</Text>
         </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+function TaskTimeline({ task }: { task: Task }) {
+  const lifecycle = lifecycleForTask(task);
+  const active =
+    lifecycle === "done" || task.state === "merged"
+      ? 3
+      : lifecycle === "ready" || task.state === "ready"
+        ? 2
+        : lifecycle === "archived" || lifecycle === "cancelled"
+          ? 4
+          : 1;
+  const steps = ["spawned", "working", "review", "applied"];
+  return (
+    <Box>
+      <Text color={UI.accent}>{padRight("Flow", 10)}</Text>
+      {steps.map((step, index) => {
+        const done = index <= active;
+        const current = index === active;
+        return (
+          <Text key={step} color={current ? UI.accent : done ? UI.success : UI.subtle} dimColor={!done}>
+            {index > 0 ? " -> " : ""}
+            {step}
+          </Text>
+        );
+      })}
+      {active === 4 ? (
+        <Text color={lifecycle === "cancelled" ? UI.danger : UI.subtle}>
+          {" -> "}
+          {lifecycle}
+        </Text>
       ) : null}
     </Box>
   );

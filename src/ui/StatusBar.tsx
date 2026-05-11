@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { Task } from "../model.js";
+import type { Task, TaskListDensity } from "../model.js";
 import { lifecycleForTask } from "../model.js";
 import { LIFECYCLE_LABEL, formatStateLabel } from "./icons.js";
 import { UI } from "./theme.js";
@@ -14,6 +14,8 @@ interface Props {
   inSession: boolean;
   filterQuery: string;
   visibleTaskCount: number;
+  density: TaskListDensity;
+  showArchived: boolean;
   width: number;
 }
 
@@ -25,6 +27,8 @@ export function StatusBar({
   inSession,
   filterQuery,
   visibleTaskCount,
+  density,
+  showArchived,
   width,
 }: Props) {
   const selectedSummary = selectedTask
@@ -35,9 +39,15 @@ export function StatusBar({
   const filterSummary = filterQuery.trim()
     ? ` · filter ${visibleTaskCount}/${taskCount}`
     : "";
+  const visibilitySummary =
+    !filterQuery.trim() && visibleTaskCount < taskCount
+      ? ` · visible ${visibleTaskCount}/${taskCount}`
+      : "";
   const next = nextAction(selectedTask, inSession);
   const followUpHint =
     suggestedFollowUps(selectedTask).length > 0 ? " · T follow-up" : "";
+  const archiveHint = showArchived ? " · z hide archived" : " · z archived";
+  const densityHint = density === "compact" ? " · v detailed" : " · v compact";
 
   return (
     <Box paddingX={1}>
@@ -50,9 +60,9 @@ export function StatusBar({
           <Text color={UI.accent}>{next}</Text>
           <Text dimColor>
             {truncate(
-              ` · ${taskCount} task${taskCount === 1 ? "" : "s"}${selectedSummary}${filterSummary}${
+              ` · ${taskCount} task${taskCount === 1 ? "" : "s"}${selectedSummary}${filterSummary}${visibilitySummary}${
                 inSession ? "" : " · not in zellij"
-              } · j/k move${followUpHint} · / filter · r refresh · ? help`,
+              } · : commands · j/k move${followUpHint} · / filter · r refresh${densityHint}${archiveHint} · ? help`,
               Math.max(0, width - next.length)
             )}
           </Text>

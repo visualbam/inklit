@@ -64,12 +64,15 @@ Movement is Vim/Helix-flavored.
 | `k` / ↑  | previous task                                              |
 | `[`      | jump to first task                                         |
 | `]`      | jump to last task                                          |
+| `:`      | open the command palette for task/view actions             |
 | `J`      | scroll inspector down 1 line                               |
 | `K`      | scroll inspector up 1 line                                 |
 | `Ctrl-D` | scroll inspector down half-page                            |
 | `Ctrl-U` | scroll inspector up half-page                              |
 | `gg`     | jump inspector to top                                      |
 | `G`      | jump inspector to bottom (re-anchors agent transcript to live tail) |
+| `v`      | toggle detailed table / compact task-card board            |
+| `z`      | show or hide archived tasks                                |
 | `n`      | new task — prompts for description, then agent (`c`/`x`)  |
 | `T` / `1` | start the top suggested next task for the selected task  |
 | `2`      | start the second suggested next task when shown            |
@@ -78,6 +81,7 @@ Movement is Vim/Helix-flavored.
 | `q` / `Ctrl-C` | exit the dashboard only; live agents keep running in zellij |
 | `Q`      | close all live agent panes after confirmation; worktrees survive |
 | `m`      | apply selected task to main — switches inspector to diff and asks y/n |
+| `A`      | archive/restore a ready, failed, or recently applied task without deleting the worktree |
 | `X`      | kill selected task — close pane + remove worktree (with y/n confirm) |
 | `t`      | inspector → task view (status, next action, checkpoint)      |
 | `f`      | inspector → files changed vs main version                  |
@@ -99,11 +103,16 @@ separate concepts:
   `done` for recently applied work.
 - **pane** is the local zellij/process state: `running`, `waiting`, `idle`, or
   `no pane`.
-- **review** is a compact readiness summary: `3f 2c 1u` means three changed
-  files, two commits ahead, one untracked file.
+- **review** is a readable readiness summary. The underlying counts are changed
+  files, commits ahead, and untracked files, rendered as badges such as
+  `3 files`, `2 commits`, and `1 untracked`.
 - **suggested next tasks** appear in the task inspector for `ready` and
   recently applied `done` rows. Press `T`/`1` or `2` to launch one through the
   normal agent picker.
+
+The board is grouped by urgency (`Waiting`, `Running`, `Idle`, `Ready`,
+`Failed`, `Done`, then archived rows when visible). Press `v` to switch between
+the detailed table and compact two-line task cards.
 
 ### Pane Icons
 
@@ -116,15 +125,16 @@ separate concepts:
 | ✗    | failed   | *not yet detected — needs exit-code state file*          |
 | ·    | applied  | task was applied and remains visible briefly before fade-out |
 
-Tasks are sorted by urgency: `waiting`, `running`, `idle`, `ready`, then
-recently applied `done` rows.
+Tasks are sorted by urgency: `waiting`, `running`, `idle`, `ready`, `failed`,
+recently applied `done` rows, then archived/cancelled rows when visible.
 
 ### Notifications
 
 When a task transitions into `⊙ waiting` (the agent is asking you something),
-lazyagent fires a macOS Notification Center popup so you can stay focused in
-your editor and only come back when there's something to answer. Best-effort
-and silent — no notifications on Linux/Windows yet.
+`ready` (available for review), or `failed`, lazyagent fires a macOS
+Notification Center popup so you can stay focused in your editor and only come
+back when there's something to answer or review. Best-effort and silent on
+Linux/Windows for now.
 
 ## Architecture
 
@@ -150,8 +160,10 @@ src/
     StatusBar.tsx  bottom hint bar
     NewTaskPrompt.tsx  description prompt + agent picker
     FilterPrompt.tsx task board filter prompt
+    CommandPalette.tsx task/view action menu
     HelpOverlay.tsx keybind reference
     followUps.ts    deterministic suggested next tasks
+    review.tsx     review-readiness badge helpers
     theme.ts       terminal-safe ANSI color tokens
     icons.ts       state → icon/color/label
 ```
@@ -188,16 +200,17 @@ The agent kind is recorded at spawn time in
 `$XDG_STATE_HOME/lazyagent/tasks.json` (default `~/.local/state/...`). Tasks
 created before lazyagent existed — or via `wt switch` directly — won't have
 an entry, so resume opens the agent picker and remembers your choice for
-next time. `X` (kill) drops the entry so a future task with the same slug
-starts clean.
+next time. The same file stores lifecycle overrides for archived rows and
+recently applied rows, so archive/done state survives restarting the TUI. `X`
+(kill) drops the entry so a future task with the same slug starts clean.
 
 ### Inspector modes
 
 The bottom half of the screen is the inspector. Toggle with `t`/`f`/`d`/`l`/`a`:
 
 - **`t` task** — Replit-style task view: lifecycle, pane state, next action,
-  checkpoint, dirty status, suggested next tasks, and pointers to review/thread
-  controls.
+  checkpoint, dirty status, review badges, a task timeline, suggested next
+  tasks, and pointers to review/thread controls.
 - **`f` files** — `git diff --name-status --find-renames <merge-base>` parsed
   into a list of all tracked task changes vs the main version, plus untracked
   files from `git ls-files --others --exclude-standard`. Rows include best-effort
@@ -229,12 +242,15 @@ what you'd be throwing away.
 it when you intentionally want to stop local agent processes; plain `q` keeps
 them running in the background like Replit tasks.
 
+`A` archives a selected ready, failed, or recently applied task. Archive is a
+dashboard lifecycle marker only: it hides the row by default, but it does not
+close panes, delete worktrees, or change branches. Press `z` to show archived
+rows and press `A` again to restore one.
+
 ## Limitations & TODOs (phase 2)
 
 - [ ] `failed` state detection (track pane exit codes in
       `$XDG_STATE_HOME/lazyagent/exits.json`).
-- [ ] Persist task lifecycle beyond the current process-derived projection
-      (`draft`, `queued`, `applying`, `archived`, `cancelled`).
 - [ ] Add a Replit-style contextual composer: keep `n` for manual task creation,
       keep power-user shortcuts, and add a single opt-in input (likely `space`)
       that can switch between new task, message selected agent, and suggested

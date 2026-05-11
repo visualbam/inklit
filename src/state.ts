@@ -1,12 +1,25 @@
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import type { AgentKind } from "./model.js";
+import type { AgentKind, ReviewStats, Task, TaskLifecycle } from "./model.js";
+
+export interface TaskSnapshot {
+  path: string;
+  shortSha: string;
+  subject: string;
+  ageSeconds: number;
+  dirty: boolean;
+  symbols: string;
+  review?: ReviewStats;
+}
 
 export interface TaskRecord {
-  agent: AgentKind;
+  agent?: AgentKind;
   spawnedAt: number;
   lastResumedAt?: number;
+  lifecycle?: TaskLifecycle;
+  lifecycleAt?: number;
+  snapshot?: TaskSnapshot;
   /**
    * The zellij pane id (e.g. `terminal_47`) we spawned this slug into.
    * Used by the poll loop to identify the pane by id instead of title —
@@ -66,6 +79,8 @@ export async function recordSpawn(
     agent,
     spawnedAt: state.tasks[slug]?.spawnedAt ?? Date.now(),
     paneId: paneId ?? state.tasks[slug]?.paneId,
+    lifecycle: "active",
+    lifecycleAt: Date.now(),
   };
   await writeFile(state);
 }
@@ -77,14 +92,54 @@ export async function recordResume(
   paneId?: string | null
 ): Promise<void> {
   const state = await readFile();
-  const existing = state.tasks[slug];
+  const existing = state.tasks[slug] ?? { spawnedAt: Date.now() };
   state.tasks[slug] = {
     agent,
     spawnedAt: existing?.spawnedAt ?? Date.now(),
     lastResumedAt: Date.now(),
     paneId: paneId ?? existing?.paneId,
+    lifecycle: "active",
+    lifecycleAt: Date.now(),
   };
   await writeFile(state);
+}
+
+/** Persist an explicit lifecycle marker. `null` clears the override. */
+export async function recordLifecycle(
+  slug: string,
+  lifecycle: TaskLifecycle | null,
+  snapshot?: TaskSnapshot
+): Promise<void> {
+  const state = await readFile();
+  const existing = state.tasks[slug] ?? { spawnedAt: Date.now() };
+  if (lifecycle === null) {
+    state.tasks[slug] = {
+      ...existing,
+      lifecycle: undefined,
+      lifecycleAt: undefined,
+      snapshot: undefined,
+    };
+  } else {
+    state.tasks[slug] = {
+      ...existing,
+      lifecycle,
+      lifecycleAt: Date.now(),
+      snapshot: snapshot ?? existing.snapshot,
+    };
+  }
+  await writeFile(state);
+}
+
+export function snapshotTask(task: Task): TaskSnapshot {
+  return {
+    path: task.path,
+    shortSha: task.shortSha,
+    subject: task.subject,
+    ageSeconds: task.ageSeconds,
+    dirty: task.dirty,
+    symbols: task.symbols,
+    review: task.review,
+  };
 }
 
 /**

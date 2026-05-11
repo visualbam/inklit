@@ -17,6 +17,9 @@ const SECTIONS: Section[] = [
       ["]", "jump to last task"],
       ["/", "filter the task list"],
       ["r", "force refresh task board"],
+      ["v", "toggle detailed / compact task board"],
+      ["z", "show / hide archived tasks"],
+      [":", "open command palette"],
     ],
   },
   {
@@ -41,6 +44,7 @@ const SECTIONS: Section[] = [
       ["enter", "focus pane (live) · resume agent (ready)"],
       ["i", "send a one-line message to the selected agent"],
       ["m", "apply selected task to main (review then confirm)"],
+      ["A", "archive or restore selected ready/done task"],
       ["X", "kill selected — close pane + remove worktree"],
       ["Q", "close all live agent panes (worktrees survive)"],
     ],

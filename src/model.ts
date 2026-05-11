@@ -45,6 +45,10 @@ export interface Task {
   ageSeconds: number;
   /** Heuristic state. */
   state: TaskState;
+  /** Optional persisted lifecycle override, such as archived/done. */
+  lifecycle?: TaskLifecycle;
+  /** Timestamp for the persisted lifecycle override. */
+  lifecycleAt?: number;
   /** Set when zellij has a pane named after this slug. */
   paneId?: string;
   /** Per-task error from wt parsing or git probing; rendered inline. */
@@ -80,6 +84,7 @@ export interface MainVersion {
 }
 
 export type InspectorMode = "task" | "files" | "diff" | "log" | "agent";
+export type TaskListDensity = "detailed" | "compact";
 
 export interface AppState {
   mainVersion: MainVersion | null;
@@ -101,9 +106,14 @@ export interface AppState {
     | "sendInput"
     | "sending"
     | "filter"
+    | "commandPalette"
     | "help"
     | "error";
   inspectorMode: InspectorMode;
+  /** Dense table vs stacked task-card board. */
+  listDensity: TaskListDensity;
+  /** Show archived/cancelled task records that are hidden by default. */
+  showArchived: boolean;
   /** Persistent task board filter. */
   filterQuery: string;
   newTaskDescription: string;
@@ -131,6 +141,8 @@ export const initialState: AppState = {
   selectedSlug: null,
   mode: "list",
   inspectorMode: "task",
+  listDensity: "detailed",
+  showArchived: false,
   newTaskDescription: "",
   flash: null,
   error: null,
@@ -157,6 +169,8 @@ export function lifecycleForState(state: TaskState): TaskLifecycle {
   }
 }
 
-export function lifecycleForTask(task: Pick<Task, "state">): TaskLifecycle {
-  return lifecycleForState(task.state);
+export function lifecycleForTask(
+  task: Pick<Task, "state"> & { lifecycle?: TaskLifecycle }
+): TaskLifecycle {
+  return task.lifecycle ?? lifecycleForState(task.state);
 }
