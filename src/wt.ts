@@ -566,6 +566,22 @@ const ANSI_RE =
   // eslint-disable-next-line no-control-regex
   /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
+export function detectPermissionRequest(screen: string): boolean {
+  const cleaned = screen.replace(ANSI_RE, "");
+  const lines = cleaned
+    .split(/\r?\n/)
+    .map((l) => l.trimEnd())
+    .filter((l) => l.length > 0);
+  const tail = lines.slice(-15);
+  if (tail.length === 0) return false;
+  const joined = tail.join("\n");
+  // Claude Code permission prompts: "? Allow <tool>" at line start.
+  if (/(^|\n)\s*\?\s+Allow\b/i.test(joined)) return true;
+  // Tool approval dialogs surface an "Always allow" option.
+  if (/\bAlways allow\b/i.test(joined)) return true;
+  return false;
+}
+
 export function detectWaiting(screen: string): boolean {
   const cleaned = screen.replace(ANSI_RE, "");
   const lines = cleaned

@@ -3,6 +3,7 @@ export type AgentKind = "claude" | "codex";
 export type TaskState =
   | "running"
   | "waiting"
+  | "permission"
   | "idle"
   | "ready"
   | "failed"
@@ -158,6 +159,7 @@ export function lifecycleForState(state: TaskState): TaskLifecycle {
   switch (state) {
     case "running":
     case "waiting":
+    case "permission":
     case "idle":
       return "active";
     case "ready":

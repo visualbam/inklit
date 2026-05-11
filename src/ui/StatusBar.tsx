@@ -74,6 +74,7 @@ export function StatusBar({
 
 function nextAction(task: Task | null, inSession: boolean): string {
   if (!task) return "Next: launch a task with n";
+  if (task.state === "permission") return "Next: enter pane to approve permission";
   if (task.state === "waiting") return "Next: respond with i";
   if (task.state === "running") {
     return inSession ? "Next: watch transcript with a" : "Next: inspect task";

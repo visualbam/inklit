@@ -4,6 +4,7 @@ import { UI } from "./theme.js";
 export const STATE_ICON: Record<TaskState, string> = {
   running: "●",
   waiting: "⊙",
+  permission: "!",
   idle: "◐",
   ready: "✓",
   failed: "✗",
@@ -13,6 +14,7 @@ export const STATE_ICON: Record<TaskState, string> = {
 export const STATE_COLOR: Record<TaskState, string> = {
   running: UI.accent,
   waiting: UI.warning,
+  permission: UI.danger,
   idle: UI.info,
   ready: UI.success,
   failed: UI.danger,
@@ -22,6 +24,7 @@ export const STATE_COLOR: Record<TaskState, string> = {
 export const STATE_LABEL: Record<TaskState, string> = {
   running: "running",
   waiting: "waiting",
+  permission: "permission",
   idle: "idle",
   ready: "no pane",
   failed: "failed",

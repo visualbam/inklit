@@ -24,6 +24,7 @@ import {
   gitFiles,
   gitLog,
   gitReviewStats,
+  detectPermissionRequest,
   detectWaiting,
   mergeToMain,
   removeWorktree,
@@ -173,18 +174,20 @@ function urgencyRank(task: Pick<Task, "state"> & { lifecycle?: TaskLifecycle }):
   if (task.lifecycle === "cancelled") return 6;
   if (task.lifecycle === "archived") return 7;
   switch (task.state) {
-    case "waiting":
+    case "permission":
       return 0;
-    case "running":
+    case "waiting":
       return 1;
-    case "idle":
+    case "running":
       return 2;
-    case "ready":
+    case "idle":
       return 3;
-    case "failed":
+    case "ready":
       return 4;
-    case "merged":
+    case "failed":
       return 5;
+    case "merged":
+      return 6;
   }
 }
 
@@ -598,7 +601,7 @@ function applyPersistedLifecycle(task: Task, record?: TaskRecord): Task {
  * change in a while. Focus/anchor flows treat it the same as running.
  */
 function isLivePane(s: TaskState): boolean {
-  return s === "running" || s === "waiting" || s === "idle";
+  return s === "running" || s === "waiting" || s === "permission" || s === "idle";
 }
 
 function screenTail(text: string): string {
@@ -736,13 +739,15 @@ export function App() {
               const paneId = pane.paneId;
               const cached = screenCacheRef.current.get(t.slug);
               const screen = cached && cached.paneId === paneId ? cached.screen : "";
-              const waiting = screen ? detectWaiting(screen) : false;
+              const permReq = screen ? detectPermissionRequest(screen) : false;
+              const waiting = !permReq && (screen ? detectWaiting(screen) : false);
+              const liveState = permReq
+                ? ("permission" as const)
+                : waiting
+                  ? ("waiting" as const)
+                  : ("running" as const);
               return applyPersistedLifecycle(
-                {
-                  ...t,
-                  state: waiting ? ("waiting" as const) : ("running" as const),
-                  paneId,
-                },
+                { ...t, state: liveState, paneId },
                 record
               );
             } catch {
@@ -837,7 +842,11 @@ export function App() {
         for (const t of finalTasks) {
           const prev = prevStatesRef.current.get(t.slug);
           if (!prev || prev === t.state) continue;
-          if (t.state === "waiting") {
+          if (t.state === "permission") {
+            notify("inklit", `${t.slug} needs a permission change`, {
+              sound: "Basso",
+            });
+          } else if (t.state === "waiting") {
             notifiedIdleRef.current.delete(t.slug);
             notify("inklit", `${t.slug} is waiting for input`);
           } else if (t.state === "idle") {

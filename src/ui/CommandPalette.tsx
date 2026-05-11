@@ -120,7 +120,7 @@ function commandRows(
 }
 
 function live(task: Task): boolean {
-  return task.state === "running" || task.state === "waiting" || task.state === "idle";
+  return task.state === "running" || task.state === "waiting" || task.state === "permission" || task.state === "idle";
 }
 
 function padRight(s: string, n: number): string {

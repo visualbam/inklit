@@ -265,12 +265,16 @@ function TaskTimeline({ task }: { task: Task }) {
 
 function paneSummary(task: Task): string {
   if (task.state === "ready") return "no live pane";
+  if (task.state === "permission") return "needs permission";
   if (task.state === "waiting") return "waiting for input";
   if (task.state === "idle") return `${formatStateLabel(task)} pane`;
   return `${formatStateLabel(task)} pane`;
 }
 
 function nextAction(task: Task): string {
+  if (task.state === "permission") {
+    return "Agent needs a permission change — enter the pane to approve or deny.";
+  }
   if (task.state === "waiting") {
     return "Respond to the agent with i or enter to focus.";
   }

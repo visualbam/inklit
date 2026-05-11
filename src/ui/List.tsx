@@ -455,6 +455,8 @@ function groupForTask(task: Task): TaskGroup {
     return { key: "cancelled", label: "Cancelled", color: UI.danger };
   }
   switch (task.state) {
+    case "permission":
+      return { key: "permission", label: "Permission", color: UI.danger };
     case "waiting":
       return { key: "waiting", label: "Waiting", color: UI.warning };
     case "running":
