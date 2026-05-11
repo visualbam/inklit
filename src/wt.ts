@@ -625,21 +625,41 @@ async function conflictedFiles(repoPath: string): Promise<string[]> {
   return stdout.split("\n").filter(Boolean);
 }
 
-async function resolveConflictsWithClaude(repoPath: string): Promise<void> {
+async function resolveConflicts(repoPath: string): Promise<void> {
   const files = await conflictedFiles(repoPath);
+  if (files.length === 0) return;
+
+  // Try Claude for each file. On any failure, stop and let Codex handle the rest.
+  let claudeFailed = false;
   for (const file of files) {
-    const fullPath = path.join(repoPath, file);
-    const content = await readFile(fullPath, "utf8");
-    const prompt =
-      `Resolve all git conflict markers in this file. Keep the best of both sides. ` +
-      `Return ONLY the resolved file content — no explanation, no markdown, no code fences.\n\n${content}`;
-    const { stdout } = await execa(
-      "claude", ["-p", prompt, "--output-format", "text", "--bare"],
-      { reject: true }
-    );
-    await writeFile(fullPath, stdout);
-    await execa("git", ["-C", repoPath, "add", file]);
+    if (claudeFailed) break;
+    try {
+      const fullPath = path.join(repoPath, file);
+      const content = await readFile(fullPath, "utf8");
+      const prompt =
+        `Resolve all git conflict markers in this file. Keep the best of both sides. ` +
+        `Return ONLY the resolved file content — no explanation, no markdown, no code fences.\n\n${content}`;
+      const { stdout } = await execa(
+        "claude", ["-p", prompt, "--output-format", "text", "--bare"],
+        { reject: true }
+      );
+      await writeFile(fullPath, stdout);
+      await execa("git", ["-C", repoPath, "add", file]);
+    } catch {
+      claudeFailed = true;
+    }
   }
+
+  if (!claudeFailed) return;
+
+  // Codex fallback: agent edits remaining conflicted files in place.
+  const remaining = await conflictedFiles(repoPath);
+  if (remaining.length === 0) return;
+  const prompt =
+    `Resolve all git conflict markers in these files: ${remaining.join(", ")}. ` +
+    `Keep the best of both sides for each conflict. Edit the files in place.`;
+  await execa("codex", ["exec", prompt], { cwd: repoPath, reject: true });
+  await execa("git", ["-C", repoPath, "add", ...remaining]);
 }
 
 /**
@@ -682,7 +702,7 @@ export async function mergeToMain(
     if (stderr.includes("not on a branch") || stderr.includes("detached HEAD")) {
       const stuck = await conflictedFiles(worktreePath);
       if (stuck.length > 0) {
-        await resolveConflictsWithClaude(worktreePath);
+        await resolveConflicts(worktreePath);
         await execa(
           "git", ["-C", worktreePath, "rebase", "--continue"],
           { env: { ...process.env, GIT_EDITOR: "true" }, reject: true }
@@ -706,7 +726,7 @@ export async function mergeToMain(
       await execa("git", ["-C", mainPath, "merge", "--squash", branch], { reject: true });
     } catch {
       // Squash merge itself conflicted — resolve with Claude then proceed.
-      await resolveConflictsWithClaude(mainPath);
+      await resolveConflicts(mainPath);
     }
 
     await execa(
@@ -738,7 +758,7 @@ export async function syncFromMain(
   async function resolveAndContinue(): Promise<void> {
     const stuck = await conflictedFiles(worktreePath);
     if (stuck.length === 0) throw new Error("Rebase failed with no conflicted files");
-    await resolveConflictsWithClaude(worktreePath);
+    await resolveConflicts(worktreePath);
     try {
       await continueRebase();
     } catch {
