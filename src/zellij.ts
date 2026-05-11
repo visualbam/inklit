@@ -145,20 +145,13 @@ export async function focusPaneId(id: string): Promise<boolean> {
 }
 
 /**
- * Focus the pane with `id` and close it. Used for actions where we already
- * know the pane id (poll-loop tracked) — sidesteps title-based lookup,
- * which fails after the agent OSC-rewrites its title (e.g. claude-code
- * setting "✳ Claude Code" within seconds of boot).
- *
- * Zellij has no `close-pane --pane-id`, so close-pane operates on whatever
- * is focused. We focus first; if focus fails (pane already gone), bail.
+ * Close the pane with `id` directly via `close-pane --pane-id`.
+ * No focus change needed — safe to call while inklit is active.
  */
 export async function closePaneById(id: string): Promise<boolean> {
   if (!inSession()) return false;
-  const focused = await focusPaneId(id);
-  if (!focused) return false;
   try {
-    await execa("zellij", ["action", "close-pane"], { reject: true });
+    await execa("zellij", ["action", "close-pane", "-p", id], { reject: true });
     return true;
   } catch {
     return false;
@@ -236,18 +229,17 @@ export async function dumpScreen(
 }
 
 /**
- * Focus the pane named `name` and then close it.
- * Returns true on success, false when no pane with that name was found.
- *
- * Zellij has no `close-pane-by-id`, so the only way to close a specific pane
- * is to focus it first. There's a benign race if the user moves focus
- * mid-call; in practice the two actions are <50ms apart.
+ * Close the pane whose name matches `name` via `close-pane --pane-id`.
+ * Looks up the pane id from the current snapshot; no focus change needed.
  */
 export async function closePaneByName(name: string): Promise<boolean> {
-  const focused = await focusPaneByName(name);
-  if (!focused) return false;
+  if (!inSession()) return false;
+  const pane = await findPaneByName(name);
+  if (!pane) return false;
+  const id = paneIdArg(pane);
+  if (!id) return false;
   try {
-    await execa("zellij", ["action", "close-pane"], { reject: true });
+    await execa("zellij", ["action", "close-pane", "-p", id], { reject: true });
     return true;
   } catch {
     return false;
