@@ -1,7 +1,11 @@
 import React, { useEffect, useMemo, useReducer, useRef } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { createHash } from "node:crypto";
-import { TaskList, taskListLineCount } from "./List.js";
+import {
+  TaskList,
+  taskListLineCount,
+  taskListMinimumHeight,
+} from "./List.js";
 import { Inspector } from "./Inspector.js";
 import { MainVersionBar } from "./MainVersionBar.js";
 import { StatusBar } from "./StatusBar.js";
@@ -1823,21 +1827,6 @@ export function App() {
     }
   }
 
-  const listHeight = Math.max(
-    4,
-    Math.min(
-      Math.max(
-        4,
-        taskListLineCount(
-          visibleTasks,
-          state.tasks.length,
-          state.filterQuery,
-          state.listDensity
-        )
-      ),
-      Math.floor(rows * (state.listDensity === "compact" ? 0.42 : 0.34))
-    )
-  );
   const showConfirm =
     state.mode === "confirmMerge" ||
     state.mode === "confirmKill" ||
@@ -1850,6 +1839,27 @@ export function App() {
   // Bordered prompt + title + hint + input/confirm row. The explicit slot
   // prevents Ink from letting prompt rows overlap the inspector.
   const bottomStripHeight = showConfirm || showSendInput || showFilter ? 7 : 0;
+  const desiredListHeight = taskListLineCount(
+    visibleTasks,
+    state.tasks.length,
+    state.filterQuery,
+    state.listDensity
+  );
+  const minimumListHeight = taskListMinimumHeight(
+    visibleTasks,
+    state.tasks.length,
+    state.filterQuery,
+    state.listDensity
+  );
+  const preferredListHeight = Math.max(
+    minimumListHeight,
+    Math.floor(rows * (state.listDensity === "compact" ? 0.5 : 0.42))
+  );
+  const availableListHeight = Math.max(4, rows - bottomStripHeight - 8 - 2);
+  const listHeight = Math.max(
+    4,
+    Math.min(desiredListHeight, preferredListHeight, availableListHeight)
+  );
   const inspectorHeight = Math.max(8, rows - listHeight - bottomStripHeight - 2);
   // Same formula as Inspector — the reducer needs it so it can clamp scrolls.
   const inspectorMaxLines = Math.max(3, inspectorHeight - 6);
@@ -1908,6 +1918,7 @@ export function App() {
           filterQuery={state.filterQuery}
           density={state.listDensity}
           width={cols - 2}
+          height={listHeight}
         />
       </Box>
       <Box flexGrow={1} flexDirection="column">

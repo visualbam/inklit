@@ -113,7 +113,9 @@ separate concepts:
 The board is grouped by urgency (`Waiting`, `Running`, `Idle`, `Ready`,
 `Failed`, `Done`, then archived rows when visible). Press `v` to switch between
 the detailed table and compact two-line task cards; lazyagent remembers that
-layout across restarts.
+layout across restarts. When the board outgrows the pane, it keeps the selected
+task inside the visible window and shows hidden-task markers above or below
+instead of letting the inspector cover task rows.
 
 ### Pane Icons
 

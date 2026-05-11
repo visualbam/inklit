@@ -20,6 +20,7 @@ interface Props {
   filterQuery: string;
   density: TaskListDensity;
   width: number;
+  height: number;
 }
 
 export function TaskList({
@@ -29,25 +30,41 @@ export function TaskList({
   filterQuery,
   density,
   width,
+  height,
 }: Props) {
   if (tasks.length === 0) {
     return <EmptyBoard filterQuery={filterQuery} totalTasks={totalTasks} />;
   }
 
+  const windowed = windowTasks({
+    tasks,
+    selectedSlug,
+    totalTasks,
+    filterQuery,
+    density,
+    height,
+  });
+
   return density === "compact" ? (
     <CompactTaskList
-      tasks={tasks}
+      tasks={windowed.tasks}
       selectedSlug={selectedSlug}
       totalTasks={totalTasks}
       filterQuery={filterQuery}
+      matchedTaskCount={tasks.length}
+      hiddenAbove={windowed.hiddenAbove}
+      hiddenBelow={windowed.hiddenBelow}
       width={width}
     />
   ) : (
     <DetailedTaskList
-      tasks={tasks}
+      tasks={windowed.tasks}
       selectedSlug={selectedSlug}
       totalTasks={totalTasks}
       filterQuery={filterQuery}
+      matchedTaskCount={tasks.length}
+      hiddenAbove={windowed.hiddenAbove}
+      hiddenBelow={windowed.hiddenBelow}
       width={width}
     />
   );
@@ -66,13 +83,150 @@ export function taskListLineCount(
   return 2 + groupCount + tasks.length + filterFooter;
 }
 
+export function taskListMinimumHeight(
+  tasks: Task[],
+  totalTasks: number,
+  filterQuery: string,
+  density: TaskListDensity
+): number {
+  if (tasks.length === 0) return filterQuery.trim() ? 4 : 6;
+  const targetRows = Math.min(tasks.length, density === "compact" ? 3 : 4);
+  const sample = tasks.slice(0, targetRows);
+  const hasOverflow = tasks.length > targetRows;
+  return taskListLineCountForSlice({
+    tasks: sample,
+    totalTasks,
+    matchedTaskCount: tasks.length,
+    filterQuery,
+    density,
+    hiddenAbove: false,
+    hiddenBelow: hasOverflow,
+  });
+}
+
+interface WindowTasksArgs {
+  tasks: Task[];
+  selectedSlug: string | null;
+  totalTasks: number;
+  filterQuery: string;
+  density: TaskListDensity;
+  height: number;
+}
+
+interface WindowedTasks {
+  tasks: Task[];
+  hiddenAbove: number;
+  hiddenBelow: number;
+}
+
+function windowTasks({
+  tasks,
+  selectedSlug,
+  totalTasks,
+  filterQuery,
+  density,
+  height,
+}: WindowTasksArgs): WindowedTasks {
+  if (
+    taskListLineCountForSlice({
+      tasks,
+      totalTasks,
+      matchedTaskCount: tasks.length,
+      filterQuery,
+      density,
+      hiddenAbove: false,
+      hiddenBelow: false,
+    }) <= height
+  ) {
+    return { tasks, hiddenAbove: 0, hiddenBelow: 0 };
+  }
+
+  const selectedIndex = Math.max(
+    0,
+    tasks.findIndex((task) => task.slug === selectedSlug)
+  );
+  let start = selectedIndex;
+  let end = selectedIndex + 1;
+
+  while (start > 0 || end < tasks.length) {
+    const visibleAbove = selectedIndex - start;
+    const visibleBelow = end - selectedIndex - 1;
+    const preferAbove = visibleAbove <= visibleBelow;
+    const added = preferAbove
+      ? tryGrowWindow("above") || tryGrowWindow("below")
+      : tryGrowWindow("below") || tryGrowWindow("above");
+    if (added) continue;
+    break;
+  }
+
+  return {
+    tasks: tasks.slice(start, end),
+    hiddenAbove: start,
+    hiddenBelow: tasks.length - end,
+  };
+
+  function tryGrowWindow(direction: "above" | "below"): boolean {
+    const nextStart = direction === "above" ? start - 1 : start;
+    const nextEnd = direction === "below" ? end + 1 : end;
+    if (nextStart < 0 || nextEnd > tasks.length) return false;
+    const fits =
+      taskListLineCountForSlice({
+        tasks: tasks.slice(nextStart, nextEnd),
+        totalTasks,
+        matchedTaskCount: tasks.length,
+        filterQuery,
+        density,
+        hiddenAbove: nextStart > 0,
+        hiddenBelow: nextEnd < tasks.length,
+      }) <= height;
+    if (!fits) return false;
+    start = nextStart;
+    end = nextEnd;
+    return true;
+  }
+}
+
+function taskListLineCountForSlice({
+  tasks,
+  totalTasks,
+  matchedTaskCount,
+  filterQuery,
+  density,
+  hiddenAbove,
+  hiddenBelow,
+}: {
+  tasks: Task[];
+  totalTasks: number;
+  matchedTaskCount: number;
+  filterQuery: string;
+  density: TaskListDensity;
+  hiddenAbove: boolean;
+  hiddenBelow: boolean;
+}): number {
+  const filterFooter = filterQuery.trim() && matchedTaskCount < totalTasks ? 1 : 0;
+  const hiddenMarkers = (hiddenAbove ? 1 : 0) + (hiddenBelow ? 1 : 0);
+  if (tasks.length === 0) return filterFooter + hiddenMarkers;
+  const groupCount = countGroups(tasks);
+  const itemLines = density === "compact" ? tasks.length * 2 : tasks.length;
+  const headerLines = density === "compact" ? 0 : 2;
+  return headerLines + groupCount + itemLines + filterFooter + hiddenMarkers;
+}
+
 function DetailedTaskList({
   tasks,
   selectedSlug,
   totalTasks,
   filterQuery,
+  matchedTaskCount,
+  hiddenAbove,
+  hiddenBelow,
   width,
-}: Omit<Props, "density">) {
+}: Omit<Props, "density" | "height" | "tasks"> & {
+  tasks: Task[];
+  matchedTaskCount: number;
+  hiddenAbove: number;
+  hiddenBelow: number;
+}) {
   // Reserve roughly: rail+icon + stage + pane + age + review + spacing.
   const reviewCol = 18;
   const fixed = 55 + reviewCol;
@@ -93,6 +247,7 @@ function DetailedTaskList({
       <Box paddingX={1}>
         <Text dimColor>{divider}</Text>
       </Box>
+      {hiddenAbove > 0 ? <HiddenMarker count={hiddenAbove} direction="above" /> : null}
       {tasks.map((t) => {
         const group = groupForTask(t);
         const showGroup = group.key !== currentGroup;
@@ -145,10 +300,11 @@ function DetailedTaskList({
           </React.Fragment>
         );
       })}
-      {filterQuery.trim() && tasks.length < totalTasks ? (
+      {hiddenBelow > 0 ? <HiddenMarker count={hiddenBelow} direction="below" /> : null}
+      {filterQuery.trim() && matchedTaskCount < totalTasks ? (
         <Box paddingX={1}>
           <Text dimColor>
-            showing {tasks.length}/{totalTasks} · clear filter with /
+            showing {matchedTaskCount}/{totalTasks} · clear filter with /
           </Text>
         </Box>
       ) : null}
@@ -161,12 +317,21 @@ function CompactTaskList({
   selectedSlug,
   totalTasks,
   filterQuery,
+  matchedTaskCount,
+  hiddenAbove,
+  hiddenBelow,
   width,
-}: Omit<Props, "density">) {
+}: Omit<Props, "density" | "height" | "tasks"> & {
+  tasks: Task[];
+  matchedTaskCount: number;
+  hiddenAbove: number;
+  hiddenBelow: number;
+}) {
   let currentGroup: string | null = null;
   const subjectWidth = Math.max(8, width - 28);
   return (
     <Box flexDirection="column">
+      {hiddenAbove > 0 ? <HiddenMarker count={hiddenAbove} direction="above" /> : null}
       {tasks.map((t) => {
         const group = groupForTask(t);
         const showGroup = group.key !== currentGroup;
@@ -200,13 +365,31 @@ function CompactTaskList({
           </React.Fragment>
         );
       })}
-      {filterQuery.trim() && tasks.length < totalTasks ? (
+      {hiddenBelow > 0 ? <HiddenMarker count={hiddenBelow} direction="below" /> : null}
+      {filterQuery.trim() && matchedTaskCount < totalTasks ? (
         <Box paddingX={1}>
           <Text dimColor>
-            showing {tasks.length}/{totalTasks} · clear filter with /
+            showing {matchedTaskCount}/{totalTasks} · clear filter with /
           </Text>
         </Box>
       ) : null}
+    </Box>
+  );
+}
+
+function HiddenMarker({
+  count,
+  direction,
+}: {
+  count: number;
+  direction: "above" | "below";
+}) {
+  return (
+    <Box paddingX={1}>
+      <Text dimColor>
+        {direction === "above" ? "↑" : "↓"} {count} task{count === 1 ? "" : "s"}{" "}
+        hidden {direction}
+      </Text>
     </Box>
   );
 }
