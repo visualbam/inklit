@@ -12,7 +12,7 @@ export interface SpawnResult {
  * Spawn a new agent task in its own worktree + zellij pane.
  *
  * Composes one shell-free command:
- *   zellij action new-pane -n <slug> -- wt switch -c [--base <base>] <slug> -x <agent> -- <description>
+ *   zellij action new-pane -n <slug> -- wt switch -c [--base <base>] <slug> -x <agent> -- <agent args>
  *
  * worktrunk handles worktree creation and `cd`; the agent inherits that cwd
  * and receives the description as its first prompt.
@@ -31,7 +31,13 @@ export async function spawnAgent(opts: {
   const slug = opts.branch ?? slugify(opts.description);
   const switchArgs = ["switch", "-c"];
   if (opts.base) switchArgs.push("--base", opts.base);
-  switchArgs.push(slug, "-x", opts.agent, "--", opts.description);
+  switchArgs.push(
+    slug,
+    "-x",
+    opts.agent,
+    "--",
+    ...launchArgsFor(opts.agent, opts.description)
+  );
   const paneId = await spawnPane({
     name: slug,
     command: "wt",
@@ -53,8 +59,8 @@ export async function spawnAgent(opts: {
  * its CLI-specific resume incantation so it picks up the prior session
  * stored under that cwd.
  *
- *   claude --continue        → most recent session in cwd
- *   codex resume --last      → most recent codex session
+ *   claude --permission-mode bypassPermissions --continue
+ *   codex --ask-for-approval never resume --last
  */
 export async function resumeAgent(opts: {
   slug: string;
@@ -75,11 +81,26 @@ export async function resumeAgent(opts: {
   return { slug: opts.slug, paneId };
 }
 
-function resumeArgsFor(agent: AgentKind): string[] {
+export function launchArgsFor(agent: AgentKind, description: string): string[] {
+  return [...approvalArgsFor(agent), description];
+}
+
+export function resumeArgsFor(agent: AgentKind): string[] {
   switch (agent) {
     case "claude":
-      return ["--continue"];
+      return [...approvalArgsFor(agent), "--continue"];
     case "codex":
-      return ["resume", "--last"];
+      return [...approvalArgsFor(agent), "resume", "--last"];
+  }
+}
+
+function approvalArgsFor(agent: AgentKind): string[] {
+  // Inklit-spawned agents run unattended in panes; avoid permission dialogs
+  // that would otherwise stall a worktree until the user focuses it.
+  switch (agent) {
+    case "claude":
+      return ["--permission-mode", "bypassPermissions"];
+    case "codex":
+      return ["--ask-for-approval", "never"];
   }
 }

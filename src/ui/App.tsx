@@ -853,7 +853,7 @@ export function App({ mainBranch = "main" }: AppProps) {
           const prev = prevStatesRef.current.get(t.slug);
           if (!prev || prev === t.state) continue;
           if (t.state === "permission") {
-            notify("inklit", `${t.slug} needs a permission change`, {
+            notify("inklit", `${t.slug} hit a permission prompt`, {
               sound: "Basso",
             });
           } else if (t.state === "waiting") {

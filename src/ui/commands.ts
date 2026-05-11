@@ -162,6 +162,7 @@ export function helpSections(targetBranch: string): HelpSection[] {
         ["--main", `review/apply target: ${targetBranch}`],
         ["spawn", "spawn --branch <name> --agent codex -- <prompt>"],
         ["batch", "spawn --branch-prefix <prefix> --count <n>"],
+        ["permissions", "spawn/resume use agent no-prompt modes"],
       ],
     },
   ];

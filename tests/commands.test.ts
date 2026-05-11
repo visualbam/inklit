@@ -61,6 +61,7 @@ test("helpSections uses the active target branch everywhere target-specific", ()
   assert.ok(rows.some(([key, label]) => key === "f" && label === "files changed vs release"));
   assert.ok(rows.some(([key, label]) => key === "m" && label.includes("release")));
   assert.ok(rows.some(([key, label]) => key === "--main" && label.endsWith("release")));
+  assert.ok(rows.some(([key, label]) => key === "permissions" && label.includes("no-prompt")));
 });
 
 test("isLiveTask matches pane-backed task states", () => {

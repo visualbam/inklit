@@ -149,7 +149,7 @@ function paneSummary(task) {
     if (task.state === "ready")
         return "no live pane";
     if (task.state === "permission")
-        return "needs permission";
+        return "permission prompt";
     if (task.state === "waiting")
         return "waiting for input";
     if (task.state === "idle")
@@ -158,7 +158,7 @@ function paneSummary(task) {
 }
 function nextAction(task, targetBranch) {
     if (task.state === "permission") {
-        return "Agent needs a permission change — enter the pane to approve or deny.";
+        return "Permission prompt detected; focus the pane or restart it with current launch flags.";
     }
     if (task.state === "waiting") {
         return "Respond to the agent with i or enter to focus.";

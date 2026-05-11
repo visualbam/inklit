@@ -377,5 +377,6 @@ export function spawnHelp(): string {
     "  --format <text|json>     output format",
     "",
     "Prompt templates in --count mode: {{branch}}, {{index}}, {{count}}.",
+    "Spawned agents use no-prompt permission modes automatically.",
   ].join("\n");
 }

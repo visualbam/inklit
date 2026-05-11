@@ -577,6 +577,8 @@ export function detectPermissionRequest(screen: string): boolean {
   const tail = lines.slice(-15);
   if (tail.length === 0) return false;
   const joined = tail.join("\n");
+  // Inklit-launched agents use no-prompt modes; keep detecting prompts for
+  // older sessions, externally spawned panes, or unsupported agent versions.
   // Claude Code permission prompts: "? Allow <tool>" at line start.
   if (/(^|\n)\s*\?\s+Allow\b/i.test(joined)) return true;
   // Tool approval dialogs surface an "Always allow" option.

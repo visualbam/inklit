@@ -1,13 +1,16 @@
 {
   "name": "inklit",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Terminal dashboard for parallel AI coding agents in git worktrees, on top of worktrunk + zellij.",
   "type": "module",
   "bin": {
-    "inklit": "./dist/index.js"
+    "inklit": "dist/index.js"
   },
   "main": "./dist/index.js",
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.tsx",

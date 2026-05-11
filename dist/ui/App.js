@@ -645,7 +645,7 @@ export function App({ mainBranch = "main" }) {
                     if (!prev || prev === t.state)
                         continue;
                     if (t.state === "permission") {
-                        notify("inklit", `${t.slug} needs a permission change`, {
+                        notify("inklit", `${t.slug} hit a permission prompt`, {
                             sound: "Basso",
                         });
                     }

@@ -106,6 +106,9 @@ inklit spawn --file tasks.json --format json
 
 `inklit spawn` must run inside a zellij session because it creates zellij panes.
 Use `--cwd <repo>` when the calling process is outside the target checkout.
+Headless and dashboard-spawned agents both use no-prompt permission modes so
+the pane keeps moving instead of waiting for approval: Claude gets
+`--permission-mode bypassPermissions`, and Codex gets `--ask-for-approval never`.
 
 ### Keybinds
 
@@ -234,11 +237,17 @@ When you press `n`:
 3. We slugify the description and run, in one invocation:
    ```
    zellij action new-pane -n <slug> --close-on-exit -- \
-     wt switch -c <slug> -x <agent> -- "<description>"
+     wt switch -c <slug> -x <agent> -- <agent-permission-flags> "<description>"
    ```
    That single command creates the worktree (worktrunk), launches the agent
    inside it, and surfaces it as a named zellij pane. The next status poll
    picks it up and shows it as `running`.
+
+Inklit adds the agent-specific no-prompt permission flags automatically:
+`claude --permission-mode bypassPermissions ...` and
+`codex --ask-for-approval never ...`. The permission status still exists for
+older panes, externally spawned tasks, or agent versions that surface a prompt
+despite those flags.
 
 If the dashboard was launched with `inklit --main <branch>`, new dashboard
 tasks pass that branch through as `wt switch --base <branch>`.
@@ -249,8 +258,8 @@ Closing an agent's zellij pane (or letting it exit) leaves the task in
 `✓ ready`. Press `enter` on a `ready` task and inklit will spawn a fresh
 pane in the existing worktree, running the agent's resume incantation:
 
-- **claude** → `claude --continue` (most recent session in cwd)
-- **codex** → `codex resume --last`
+- **claude** → `claude --permission-mode bypassPermissions --continue`
+- **codex** → `codex --ask-for-approval never resume --last`
 
 The agent picks up its previous conversation; the worktree is unchanged so
 any uncommitted work is still there. The status bar verb on `enter` flips

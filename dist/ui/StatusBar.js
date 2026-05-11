@@ -27,7 +27,7 @@ function nextAction(task, inSession) {
     if (!task)
         return "Next: launch a task with n";
     if (task.state === "permission")
-        return "Next: enter pane to approve permission";
+        return "Next: focus pane to clear permission prompt";
     if (task.state === "waiting")
         return "Next: respond with i";
     if (task.state === "running") {
