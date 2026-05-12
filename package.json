@@ -1,6 +1,6 @@
 {
   "name": "inklit",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Terminal dashboard for parallel AI coding agents in git worktrees, on top of worktrunk + zellij.",
   "type": "module",
   "bin": {

@@ -633,6 +633,18 @@ async function conflictedFiles(repoPath: string): Promise<string[]> {
 const CLAUDE_RESOLVE_TIMEOUT_MS = 120_000;
 const CODEX_RESOLVE_TIMEOUT_MS = 180_000;
 
+// AI conflict resolvers must NOT inherit our controlling TTY. If they did
+// (claude/codex CLIs sometimes open /dev/tty directly for auth or permission
+// prompts), they'd silently fight inklit for the user's keystrokes and the
+// whole terminal would appear frozen. `detached: true` calls setsid() on
+// Unix, putting the child in a new session with no controlling terminal —
+// so any /dev/tty open() fails fast instead of hanging.
+const detachedAiOptions = {
+  stdin: "ignore",
+  detached: true,
+  forceKillAfterDelay: 2_000,
+} as const;
+
 async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise<void> {
   const files = await conflictedFiles(repoPath);
   if (files.length === 0) return;
@@ -650,7 +662,12 @@ async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise
         `Return ONLY the resolved file content — no explanation, no markdown, no code fences.\n\n${content}`;
       const { stdout } = await execa(
         "claude", ["-p", prompt, "--output-format", "text", "--bare"],
-        { reject: true, timeout: CLAUDE_RESOLVE_TIMEOUT_MS, cancelSignal: signal }
+        {
+          reject: true,
+          timeout: CLAUDE_RESOLVE_TIMEOUT_MS,
+          cancelSignal: signal,
+          ...detachedAiOptions,
+        }
       );
       await writeFile(fullPath, stdout);
       await execa("git", ["-C", repoPath, "add", file], { cancelSignal: signal });
@@ -670,7 +687,11 @@ async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise
     `Resolve all git conflict markers in these files: ${remaining.join(", ")}. ` +
     `Keep the best of both sides for each conflict. Edit the files in place.`;
   await execa("codex", ["exec", prompt], {
-    cwd: repoPath, reject: true, timeout: CODEX_RESOLVE_TIMEOUT_MS, cancelSignal: signal,
+    cwd: repoPath,
+    reject: true,
+    timeout: CODEX_RESOLVE_TIMEOUT_MS,
+    cancelSignal: signal,
+    ...detachedAiOptions,
   });
   await execa("git", ["-C", repoPath, "add", ...remaining], { cancelSignal: signal });
 }

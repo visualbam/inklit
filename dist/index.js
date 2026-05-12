@@ -1,9 +1,22 @@
 #!/usr/bin/env node
 import React from "react";
 import { render } from "ink";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { App } from "./ui/App.js";
 import { renameOwnPane } from "./zellij.js";
 import { parseGlobalArgs, rootHelp, runSpawnCommand } from "./cli.js";
+function readPackageVersion() {
+    try {
+        const here = dirname(fileURLToPath(import.meta.url));
+        const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+        return typeof pkg.version === "string" ? pkg.version : "unknown";
+    }
+    catch {
+        return "unknown";
+    }
+}
 const args = process.argv.slice(2);
 let parsed;
 try {
@@ -16,7 +29,7 @@ catch (err) {
 }
 if (parsed.command === "version") {
     // eslint-disable-next-line no-console
-    console.log("inklit 0.0.1");
+    console.log(`inklit ${readPackageVersion()}`);
     process.exit(0);
 }
 if (parsed.command === "help") {
