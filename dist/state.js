@@ -95,6 +95,7 @@ export async function recordLifecycle(slug, lifecycle, snapshot) {
                 lifecycleAt: undefined,
                 snapshot: undefined,
                 operation: undefined,
+                failure: undefined,
             };
             return;
         }

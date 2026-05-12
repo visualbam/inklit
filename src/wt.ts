@@ -1,5 +1,5 @@
 import { execa, ExecaError } from "execa";
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MainVersion, ReviewStats, Task, TaskState } from "./model.js";
 
@@ -473,6 +473,41 @@ async function gitUntrackedFiles(worktreePath: string): Promise<string[]> {
   return stdout ? stdout.split("\n").filter(Boolean) : [];
 }
 
+async function gitFullPatch(
+  worktreePath: string,
+  target: string
+): Promise<string> {
+  const base = await gitDiffBase(worktreePath, target);
+  const parts: string[] = [];
+  const { stdout: tracked } = await execa(
+    "git",
+    ["-C", worktreePath, "diff", "--binary", "--find-renames", base],
+    { reject: false, stripFinalNewline: true, maxBuffer: 50_000_000 }
+  );
+  if (tracked) parts.push(tracked);
+
+  const untracked = await gitUntrackedFiles(worktreePath);
+  for (const file of untracked) {
+    const { stdout } = await execa(
+      "git",
+      [
+        "-C",
+        worktreePath,
+        "diff",
+        "--no-index",
+        "--binary",
+        "--",
+        "/dev/null",
+        file,
+      ],
+      { reject: false, stripFinalNewline: true, maxBuffer: 50_000_000 }
+    );
+    if (stdout) parts.push(stdout);
+  }
+
+  return parts.join("\n");
+}
+
 async function gitLines(
   cwd: string,
   args: string[],
@@ -619,6 +654,42 @@ async function mainWorktreePath(fromPath: string): Promise<string> {
   return line.slice("worktree ".length).trim();
 }
 
+async function currentBranchName(repoPath: string): Promise<string> {
+  const { stdout } = await execa(
+    "git",
+    ["-C", repoPath, "branch", "--show-current"],
+    { reject: false, stripFinalNewline: true }
+  );
+  return stdout.trim();
+}
+
+async function hasLocalChanges(repoPath: string): Promise<boolean> {
+  const { stdout } = await execa(
+    "git",
+    ["-C", repoPath, "status", "--porcelain"],
+    { reject: false, stripFinalNewline: true }
+  );
+  return stdout.length > 0;
+}
+
+async function stashIfDirty(
+  repoPath: string,
+  message: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  if (!(await hasLocalChanges(repoPath))) return false;
+  await execa(
+    "git",
+    ["-C", repoPath, "stash", "push", "--include-untracked", "-m", message],
+    { reject: true, cancelSignal: signal }
+  );
+  return true;
+}
+
+async function popStash(repoPath: string): Promise<void> {
+  await execa("git", ["-C", repoPath, "stash", "pop"], { reject: false });
+}
+
 async function conflictedFiles(repoPath: string): Promise<string[]> {
   const { stdout } = await execa(
     "git", ["-C", repoPath, "diff", "--name-only", "--diff-filter=U"],
@@ -641,6 +712,121 @@ async function filesWithConflictMarkers(
     if (containsConflictMarkers(content)) marked.push(file);
   }
   return marked;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function gitInternalPath(
+  repoPath: string,
+  gitPath: string
+): Promise<string> {
+  const { stdout } = await execa(
+    "git",
+    ["-C", repoPath, "rev-parse", "--git-path", gitPath],
+    { reject: true, stripFinalNewline: true }
+  );
+  const resolved = stdout.trim();
+  return path.isAbsolute(resolved) ? resolved : path.join(repoPath, resolved);
+}
+
+async function rebaseInProgress(repoPath: string): Promise<boolean> {
+  const [mergePath, applyPath] = await Promise.all([
+    gitInternalPath(repoPath, "rebase-merge"),
+    gitInternalPath(repoPath, "rebase-apply"),
+  ]);
+  return (await pathExists(mergePath)) || (await pathExists(applyPath));
+}
+
+export function isSkippableRebaseStop(output: string): boolean {
+  return (
+    /No changes - did you forget to use 'git add'\?/i.test(output) ||
+    /previous cherry-pick is now empty/i.test(output) ||
+    /patch contents already upstream/i.test(output) ||
+    /nothing to commit, working tree clean/i.test(output)
+  );
+}
+
+function firstOutputLine(output: string): string {
+  return (
+    output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? "unknown error"
+  );
+}
+
+const MAX_REBASE_STEPS = 50;
+
+async function continueRebaseUntilDone(
+  repoPath: string,
+  signal?: AbortSignal
+): Promise<void> {
+  for (let step = 0; step < MAX_REBASE_STEPS; step++) {
+    if (signal?.aborted) throw new Error("Cancelled");
+
+    const inProgress = await rebaseInProgress(repoPath);
+    const stuck = await conflictedFiles(repoPath);
+    if (!inProgress) {
+      if (stuck.length > 0) {
+        await resolveConflicts(repoPath, signal);
+      }
+      return;
+    }
+
+    if (stuck.length > 0) {
+      await resolveConflicts(repoPath, signal);
+    }
+
+    const result = await execa(
+      "git",
+      ["-C", repoPath, "rebase", "--continue"],
+      {
+        env: { ...process.env, GIT_EDITOR: "true" },
+        reject: false,
+        cancelSignal: signal,
+      }
+    );
+    const output = [result.stderr, result.stdout].filter(Boolean).join("\n");
+
+    if (result.exitCode === 0) {
+      if (!(await rebaseInProgress(repoPath))) return;
+      continue;
+    }
+
+    if (signal?.aborted) throw new Error("Cancelled");
+
+    const stillStuck = await conflictedFiles(repoPath);
+    if (stillStuck.length > 0) continue;
+
+    if (isSkippableRebaseStop(output)) {
+      await execa("git", ["-C", repoPath, "rebase", "--skip"], {
+        reject: true,
+        cancelSignal: signal,
+      });
+      if (!(await rebaseInProgress(repoPath))) return;
+      continue;
+    }
+
+    if (!(await rebaseInProgress(repoPath)) && /No rebase in progress/i.test(output)) {
+      return;
+    }
+
+    throw new WtError(
+      `git rebase --continue failed: ${firstOutputLine(output)}`,
+      output || undefined
+    );
+  }
+
+  throw new WtError(
+    `git rebase did not complete after ${MAX_REBASE_STEPS} steps`
+  );
 }
 
 // Per-file budget for the AI conflict resolvers. Without these, a hung CLI
@@ -736,7 +922,7 @@ async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise
  *  1. Main has uncommitted changes → stash, merge, unstash.
  *  2. Worktree is mid-rebase (detached HEAD) → Claude resolves conflicts,
  *     rebase continues, then merge retries.
- *  3. Last resort → manual git squash-merge with Claude conflict resolution.
+ *  3. Last resort → apply the full task patch with AI conflict resolution.
  */
 export async function mergeToMain(
   worktreePath: string,
@@ -756,8 +942,12 @@ async function mergeToMainInner(
   target: string,
   signal?: AbortSignal
 ): Promise<void> {
+  const originalBranch = await currentBranchName(worktreePath);
   const wtMerge = () =>
-    execa("wt", ["-C", worktreePath, "merge", target, "-y"], { reject: true, cancelSignal: signal });
+    execa("wt", ["-C", worktreePath, "merge", target, "-y"], {
+      reject: true,
+      cancelSignal: signal,
+    });
 
   // First attempt.
   try {
@@ -770,53 +960,91 @@ async function mergeToMainInner(
     // Case 1: main has uncommitted changes blocking the push step.
     if (stderr.includes("conflicting uncommitted changes")) {
       const mainPath = await mainWorktreePath(worktreePath);
-      await execa("git", ["-C", mainPath, "stash", "push", "-m", "inklit-auto-stash-before-merge"], { reject: true, cancelSignal: signal });
+      const stashedMain = await stashIfDirty(
+        mainPath,
+        "inklit-auto-stash-before-merge",
+        signal
+      );
       try {
         await wtMerge();
         return;
       } finally {
-        await execa("git", ["-C", mainPath, "stash", "pop"], { reject: false });
+        if (stashedMain) await popStash(mainPath);
       }
     }
 
     // Case 2: worktree is mid-rebase (wt merge triggered a rebase that conflicted).
-    if (stderr.includes("not on a branch") || stderr.includes("detached HEAD")) {
-      const stuck = await conflictedFiles(worktreePath);
-      if (stuck.length > 0) {
-        await resolveConflicts(worktreePath, signal);
-        await execa(
-          "git", ["-C", worktreePath, "rebase", "--continue"],
-          { env: { ...process.env, GIT_EDITOR: "true" }, reject: true, cancelSignal: signal }
-        );
-        try {
-          await wtMerge();
-          return;
-        } catch { /* fall through to last-resort below */ }
+    if (
+      stderr.includes("not on a branch") ||
+      stderr.includes("detached HEAD") ||
+      stderr.includes("rebase") ||
+      (await rebaseInProgress(worktreePath))
+    ) {
+      await continueRebaseUntilDone(worktreePath, signal);
+      try {
+        await wtMerge();
+        return;
+      } catch {
+        /* fall through to last-resort below */
       }
     }
 
     // Last resort: manual squash merge via git so wt pre-checks can't block us.
     const mainPath = await mainWorktreePath(worktreePath);
-    const { stdout: branchOut } = await execa("git", ["-C", worktreePath, "branch", "--show-current"], { reject: false });
-    const branch = branchOut.trim();
+    const branch = originalBranch || (await currentBranchName(worktreePath));
     if (!branch) {
-      throw new WtError(`wt merge ${target} failed: ${e.shortMessage ?? e.message}`, stderr);
+      throw new WtError(
+        `wt merge ${target} failed: ${e.shortMessage ?? e.message}`,
+        stderr
+      );
     }
 
-    try {
-      await execa("git", ["-C", mainPath, "merge", "--squash", branch], { reject: true, cancelSignal: signal });
-    } catch {
-      // Squash merge itself conflicted — resolve with Claude then proceed.
-      await resolveConflicts(mainPath, signal);
+    const patch = await gitFullPatch(worktreePath, target);
+    if (!patch.trim()) {
+      throw new WtError(`no changes to merge from ${branch}`, stderr);
     }
 
-    await execa(
-      "git", ["-C", mainPath, "commit", "--no-edit", "-m", `squash: ${branch}`],
-      { reject: true, cancelSignal: signal }
+    const stashedMain = await stashIfDirty(
+      mainPath,
+      "inklit-auto-stash-before-manual-merge",
+      signal
     );
+    try {
+      const apply = await execa(
+        "git",
+        ["-C", mainPath, "apply", "--index", "--3way"],
+        {
+          input: patch,
+          reject: false,
+          cancelSignal: signal,
+          maxBuffer: 50_000_000,
+        }
+      );
+      if (apply.exitCode !== 0) {
+        const output = [apply.stderr, apply.stdout].filter(Boolean).join("\n");
+        const stuck = await conflictedFiles(mainPath);
+        if (stuck.length === 0) {
+          throw new WtError(
+            `git apply fallback patch failed: ${firstOutputLine(output)}`,
+            output || stderr
+          );
+        }
+        await resolveConflicts(mainPath, signal);
+      }
+
+      await execa(
+        "git",
+        ["-C", mainPath, "commit", "--no-edit", "-m", `squash: ${branch}`],
+        { reject: true, cancelSignal: signal }
+      );
+    } finally {
+      if (stashedMain) await popStash(mainPath);
+    }
 
     // Clean up the worktree now that we've merged manually.
-    await execa("wt", ["remove", branch, "-y", "-f", "-D", "--foreground"], { reject: false });
+    await execa("wt", ["remove", branch, "-y", "-f", "-D", "--foreground"], {
+      reject: false,
+    });
   }
 }
 
@@ -844,41 +1072,43 @@ async function syncFromMainInner(
   target: string,
   signal?: AbortSignal
 ): Promise<void> {
-  const continueRebase = () =>
-    execa("git", ["-C", worktreePath, "rebase", "--continue"], {
-      env: { ...process.env, GIT_EDITOR: "true" },
+  try {
+    await execa("git", ["-C", worktreePath, "rebase", "--autostash", target], {
       reject: true,
       cancelSignal: signal,
     });
-
-  async function resolveAndContinue(): Promise<void> {
-    const stuck = await conflictedFiles(worktreePath);
-    if (stuck.length === 0) throw new Error("Rebase failed with no conflicted files");
-    await resolveConflicts(worktreePath, signal);
-    try {
-      await continueRebase();
-    } catch {
-      if (signal?.aborted) throw new Error("Cancelled");
-      await resolveAndContinue();
-    }
-  }
-
-  try {
-    await execa("git", ["-C", worktreePath, "rebase", target], { reject: true, cancelSignal: signal });
   } catch (err) {
     const e = err as ExecaError;
     const stderr = typeof e.stderr === "string" ? e.stderr : "";
     const stuck = await conflictedFiles(worktreePath);
-    if (stuck.length > 0) {
-      try {
-        await resolveAndContinue();
-        return;
-      } catch (resolveErr) {
-        await execa("git", ["-C", worktreePath, "rebase", "--abort"], { reject: false });
-        throw resolveErr;
-      }
+    const inProgress = await rebaseInProgress(worktreePath);
+    if (!inProgress && stuck.length === 0) {
+      throw new WtError(
+        `sync from ${target} failed: ${e.shortMessage ?? e.message}`,
+        stderr
+      );
     }
-    throw new WtError(`sync from ${target} failed: ${e.shortMessage ?? e.message}`, stderr);
+    try {
+      await continueRebaseUntilDone(worktreePath, signal);
+      return;
+    } catch (resolveErr) {
+      await execa("git", ["-C", worktreePath, "rebase", "--abort"], {
+        reject: false,
+      });
+      const message =
+        resolveErr instanceof Error ? resolveErr.message : String(resolveErr);
+      const resolveDetails =
+        resolveErr instanceof WtError
+          ? resolveErr.stderr
+          : resolveErr instanceof Error
+            ? resolveErr.message
+            : String(resolveErr);
+      const details = [stderr, resolveDetails].filter(Boolean).join("\n\n");
+      throw new WtError(
+        `sync from ${target} failed: ${message}`,
+        details || stderr
+      );
+    }
   }
 }
 

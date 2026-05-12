@@ -169,6 +169,7 @@ export async function recordLifecycle(
         lifecycleAt: undefined,
         snapshot: undefined,
         operation: undefined,
+        failure: undefined,
       };
       return;
     }

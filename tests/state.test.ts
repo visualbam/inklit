@@ -91,6 +91,7 @@ test("state records spawn, resume, panes, lifecycle, and removal", async () => {
     assert.equal((await loadAll())["task-a"]?.lifecycle, undefined);
     assert.equal((await loadAll())["task-a"]?.snapshot, undefined);
     assert.equal((await loadAll())["task-a"]?.operation, undefined);
+    assert.equal((await loadAll())["task-a"]?.failure, undefined);
 
     await clearPane("task-a");
     assert.equal((await loadAll())["task-a"]?.paneId, undefined);
