@@ -1607,6 +1607,33 @@ export function App({ mainBranch = "main" }) {
         }
         return null;
     }
+    async function collectPaneIdsForTask(task) {
+        const ids = new Set();
+        if (task.paneId)
+            ids.add(task.paneId);
+        if (!inSess)
+            return ids;
+        try {
+            const snapshot = await panesSnapshot();
+            const cwdHit = snapshot.byCwd.get(task.path);
+            if (cwdHit)
+                ids.add(cwdHit.paneId);
+        }
+        catch {
+            /* best-effort: the recorded paneId is still useful if zellij is busy */
+        }
+        return ids;
+    }
+    async function closePaneIds(ids) {
+        let closed = 0;
+        for (const id of ids) {
+            if (await closePaneById(id))
+                closed += 1;
+        }
+        if (closed > 0)
+            await focusOwnPane().catch(() => false);
+        return closed;
+    }
     async function doSpawn(description, agent) {
         dispatch({ type: "mode/spawning" });
         try {
@@ -1656,10 +1683,15 @@ export function App({ mainBranch = "main" }) {
             type: "flash",
             message: `Merging ${slug} → ${targetBranch} in background.`,
         });
+        const paneIdsToClose = await collectPaneIdsForTask(task);
         await recordTaskOperation(slug, operation, snapshotTask(task)).catch(() => { });
         try {
             await mergeToMain(task.path, targetBranch, controller.signal);
             await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => { });
+            const closedPaneCount = await closePaneIds(paneIdsToClose);
+            if (closedPaneCount > 0 || paneIdsToClose.size === 0) {
+                await clearPane(slug).catch(() => { });
+            }
             const mergedTask = {
                 ...task,
                 state: "merged",
@@ -1675,7 +1707,12 @@ export function App({ mainBranch = "main" }) {
             });
             reviewStatsRef.current.delete(slug);
             dispatch({ type: "task/merged", slug, task: mergedTask });
-            dispatch({ type: "flash", message: `Applied ${slug} → ${targetBranch}` });
+            dispatch({
+                type: "flash",
+                message: closedPaneCount > 0
+                    ? `Applied ${slug} → ${targetBranch} and closed pane.`
+                    : `Applied ${slug} → ${targetBranch}`,
+            });
             refreshProjectRef.current();
         }
         catch (err) {

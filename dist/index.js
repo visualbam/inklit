@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { App } from "./ui/App.js";
-import { renameOwnPane } from "./zellij.js";
+import { renameOwnPane, renameOwnTab } from "./zellij.js";
 import { parseGlobalArgs, rootHelp, runSpawnCommand } from "./cli.js";
 function readPackageVersion() {
     try {
@@ -49,7 +49,8 @@ if (parsed.command === "spawn") {
         process.exit(1);
     }
 }
-renameOwnPane("inklit");
+renameOwnPane("tasks");
+renameOwnTab("inklit");
 const { waitUntilExit } = render(React.createElement(App, { mainBranch: parsed.mainBranch }));
 waitUntilExit().then(() => process.exit(0), (err) => {
     // eslint-disable-next-line no-console

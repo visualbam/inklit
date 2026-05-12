@@ -74,6 +74,22 @@ function ourPaneId() {
     return /^\d+$/.test(raw) ? `terminal_${raw}` : raw;
 }
 /**
+ * Rename the current tab. No-op when not in a session.
+ */
+export async function renameOwnTab(name) {
+    if (!inSession())
+        return;
+    try {
+        await execa("zellij", ["action", "rename-tab", name], {
+            reject: true,
+            timeout: 1000,
+        });
+    }
+    catch {
+        // older zellij builds may not support rename-tab — ignore.
+    }
+}
+/**
  * Rename our own pane to `name`. Tries the zellij action first (requires the
  * pane to be focused, which it normally is at startup); also emits the OSC 0
  * title sequence so the rename survives a zellij session reload.
