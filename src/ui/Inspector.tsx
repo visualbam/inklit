@@ -209,6 +209,7 @@ function TaskOverview({
         : "No live pane; enter resumes the recorded agent.",
     ],
     ["Checkpoint", `${task.shortSha || "unknown"} on ${task.slug}`],
+    ["Preview", task.preview?.url ?? "not running yet"],
     [
       "Changes",
       task.dirty

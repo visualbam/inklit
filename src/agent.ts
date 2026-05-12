@@ -1,6 +1,7 @@
 import { spawnPane } from "./zellij.js";
 import { slugify } from "./wt.js";
 import { recordSpawn, recordResume } from "./state.js";
+import { refreshTaskPreview } from "./preview.js";
 import type { AgentKind } from "./model.js";
 
 export interface SpawnResult {
@@ -50,6 +51,7 @@ export async function spawnAgent(opts: {
   // poll tick can read it from disk (~5-20ms cost; spawn already takes
   // hundreds of ms because zellij + wt + agent boot).
   await recordSpawn(slug, opts.agent, paneId).catch(() => {});
+  void refreshTaskPreview(slug, opts.cwd).catch(() => {});
   return { slug, paneId };
 }
 
@@ -78,6 +80,7 @@ export async function resumeAgent(opts: {
     anchorPaneId: opts.anchorPaneId,
   });
   await recordResume(opts.slug, opts.agent, paneId).catch(() => {});
+  void refreshTaskPreview(opts.slug, opts.cwd).catch(() => {});
   return { slug: opts.slug, paneId };
 }
 

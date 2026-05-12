@@ -18,6 +18,7 @@ import { listProject, gitDiff, gitFiles, gitLog, gitReviewStats, detectPermissio
 import { inSession, dumpScreen, focusPaneByName, focusPaneId, focusOwnPane, closePaneByName, closePaneById, sendKeysToPaneId, sendKeysToSlug, panesSnapshot, } from "../zellij.js";
 import { spawnAgent, resumeAgent } from "../agent.js";
 import { getAgent, loadAll, recordPane, clearPane, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, } from "../state.js";
+import { clearTaskPreview } from "../preview.js";
 import { notify } from "../notify.js";
 import { initialState, lifecycleForTask } from "../model.js";
 const EMPTY_CONTENT = { diff: "", log: "", agent: "", files: [] };
@@ -1687,6 +1688,7 @@ export function App({ mainBranch = "main" }) {
         await recordTaskOperation(slug, operation, snapshotTask(task)).catch(() => { });
         try {
             await mergeToMain(task.path, targetBranch, controller.signal);
+            await clearTaskPreview(slug, task.preview).catch(() => { });
             await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => { });
             const closedPaneCount = await closePaneIds(paneIdsToClose);
             if (closedPaneCount > 0 || paneIdsToClose.size === 0) {
@@ -1938,8 +1940,8 @@ export function App({ mainBranch = "main" }) {
     async function doKill(slug) {
         dispatch({ type: "mode/killing" });
         try {
+            const task = state.tasks.find((t) => t.slug === slug);
             if (inSess) {
-                const task = state.tasks.find((t) => t.slug === slug);
                 if (task?.paneId) {
                     await closePaneById(task.paneId);
                 }
@@ -1948,6 +1950,7 @@ export function App({ mainBranch = "main" }) {
                     await closePaneByName(slug);
                 }
             }
+            await clearTaskPreview(slug, task?.preview).catch(() => { });
             await removeWorktree(slug);
             // Drop the state-file entry so a future task with the same slug
             // doesn't inherit the wrong agent kind.

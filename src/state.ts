@@ -10,6 +10,7 @@ import type {
   TaskLifecycle,
   TaskListDensity,
   TaskOperation,
+  TaskPreview,
 } from "./model.js";
 
 export interface TaskSnapshot {
@@ -41,6 +42,8 @@ export interface TaskRecord {
   operation?: TaskOperation;
   /** Last operation failure details, kept until retry/success/removal. */
   failure?: TaskFailure;
+  /** Best-effort local preview server metadata. */
+  preview?: TaskPreview;
 }
 
 export interface UiPrefs {
@@ -119,14 +122,17 @@ export async function recordSpawn(
 ): Promise<void> {
   const now = Date.now();
   await withState((state) => {
+    const existing = state.tasks[slug] ?? { spawnedAt: now };
     state.tasks[slug] = {
+      ...existing,
       agent,
-      spawnedAt: state.tasks[slug]?.spawnedAt ?? now,
-      paneId: paneId ?? state.tasks[slug]?.paneId,
+      spawnedAt: existing.spawnedAt ?? now,
+      paneId: paneId ?? existing.paneId,
       lifecycle: "active",
       lifecycleAt: now,
       operation: undefined,
       failure: undefined,
+      preview: existing.preview,
     };
   });
 }
@@ -141,6 +147,7 @@ export async function recordResume(
   await withState((state) => {
     const existing = state.tasks[slug] ?? { spawnedAt: now };
     state.tasks[slug] = {
+      ...existing,
       agent,
       spawnedAt: existing.spawnedAt,
       lastResumedAt: now,
@@ -149,6 +156,7 @@ export async function recordResume(
       lifecycleAt: now,
       operation: undefined,
       failure: undefined,
+      preview: existing.preview,
     };
   });
 }
@@ -282,6 +290,29 @@ export async function clearPane(slug: string): Promise<void> {
     const existing = state.tasks[slug];
     if (!existing || !existing.paneId) return false;
     state.tasks[slug] = { ...existing, paneId: undefined };
+  });
+}
+
+/** Persist or replace the task's preview server metadata. */
+export async function recordPreview(
+  slug: string,
+  preview: TaskPreview
+): Promise<void> {
+  await withState((state) => {
+    const existing = state.tasks[slug] ?? { spawnedAt: preview.startedAt };
+    state.tasks[slug] = {
+      ...existing,
+      preview,
+    };
+  });
+}
+
+/** Clear a task's preview metadata without removing the rest of the record. */
+export async function clearPreview(slug: string): Promise<void> {
+  await withState((state) => {
+    const existing = state.tasks[slug];
+    if (!existing || !existing.preview) return false;
+    state.tasks[slug] = { ...existing, preview: undefined };
   });
 }
 

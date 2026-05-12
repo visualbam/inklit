@@ -55,14 +55,17 @@ async function withState(mutate) {
 export async function recordSpawn(slug, agent, paneId) {
     const now = Date.now();
     await withState((state) => {
+        const existing = state.tasks[slug] ?? { spawnedAt: now };
         state.tasks[slug] = {
+            ...existing,
             agent,
-            spawnedAt: state.tasks[slug]?.spawnedAt ?? now,
-            paneId: paneId ?? state.tasks[slug]?.paneId,
+            spawnedAt: existing.spawnedAt ?? now,
+            paneId: paneId ?? existing.paneId,
             lifecycle: "active",
             lifecycleAt: now,
             operation: undefined,
             failure: undefined,
+            preview: existing.preview,
         };
     });
 }
@@ -72,6 +75,7 @@ export async function recordResume(slug, agent, paneId) {
     await withState((state) => {
         const existing = state.tasks[slug] ?? { spawnedAt: now };
         state.tasks[slug] = {
+            ...existing,
             agent,
             spawnedAt: existing.spawnedAt,
             lastResumedAt: now,
@@ -80,6 +84,7 @@ export async function recordResume(slug, agent, paneId) {
             lifecycleAt: now,
             operation: undefined,
             failure: undefined,
+            preview: existing.preview,
         };
     });
 }
@@ -191,6 +196,25 @@ export async function clearPane(slug) {
         if (!existing || !existing.paneId)
             return false;
         state.tasks[slug] = { ...existing, paneId: undefined };
+    });
+}
+/** Persist or replace the task's preview server metadata. */
+export async function recordPreview(slug, preview) {
+    await withState((state) => {
+        const existing = state.tasks[slug] ?? { spawnedAt: preview.startedAt };
+        state.tasks[slug] = {
+            ...existing,
+            preview,
+        };
+    });
+}
+/** Clear a task's preview metadata without removing the rest of the record. */
+export async function clearPreview(slug) {
+    await withState((state) => {
+        const existing = state.tasks[slug];
+        if (!existing || !existing.preview)
+            return false;
+        state.tasks[slug] = { ...existing, preview: undefined };
     });
 }
 /** Drop a task entry (e.g. after `X` kill succeeds). Best-effort. */

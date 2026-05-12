@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearPane,
+  clearPreview,
   getAgent,
   loadAll,
   loadUiPrefs,
@@ -14,6 +15,7 @@ import {
   recordRemove,
   recordResume,
   recordSpawn,
+  recordPreview,
   recordTaskFailure,
   recordTaskOperation,
   type TaskSnapshot,
@@ -48,6 +50,19 @@ test("state records spawn, resume, panes, lifecycle, and removal", async () => {
     assert.equal(resumed?.agent, "claude");
     assert.equal(resumed?.paneId, "terminal_2");
     assert.equal(typeof resumed?.lastResumedAt, "number");
+
+    await recordPreview("task-a", {
+      url: "http://127.0.0.1:4173",
+      port: 4173,
+      pid: 1234,
+      command: "npm run dev",
+      kind: "app",
+      startedAt: 99,
+    });
+    assert.equal((await loadAll())["task-a"]?.preview?.url, "http://127.0.0.1:4173");
+
+    await clearPreview("task-a");
+    assert.equal((await loadAll())["task-a"]?.preview, undefined);
 
     await recordPane("task-a", "terminal_3");
     assert.equal((await loadAll())["task-a"]?.paneId, "terminal_3");

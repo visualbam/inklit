@@ -32,6 +32,21 @@ export interface TaskOperation {
   startedAt: number;
 }
 
+export interface TaskPreview {
+  /** Local URL the preview server is listening on. */
+  url: string;
+  /** Port selected for this task. */
+  port: number;
+  /** Process id for the preview server, used for cleanup. */
+  pid: number;
+  /** Human-readable label for the command that launched it. */
+  command: string;
+  /** Distinguishes app-server launches from static fallbacks. */
+  kind: "app" | "static";
+  /** Timestamp for when the preview process started. */
+  startedAt: number;
+}
+
 export interface TaskFailure {
   phase: "merge";
   message: string;
@@ -76,6 +91,8 @@ export interface Task {
   operation?: TaskOperation;
   /** Persisted failure metadata for operation errors that need review. */
   failure?: TaskFailure;
+  /** Best-effort local preview server metadata. */
+  preview?: TaskPreview;
   /** Working tree dirty flag, surfaced as a glyph. */
   dirty: boolean;
   /** Compact review-readiness counts for the task board. */

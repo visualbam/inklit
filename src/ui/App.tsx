@@ -58,6 +58,7 @@ import {
   snapshotTask,
   type TaskRecord,
 } from "../state.js";
+import { clearTaskPreview } from "../preview.js";
 import { notify } from "../notify.js";
 import type {
   AgentKind,
@@ -1916,6 +1917,7 @@ export function App({ mainBranch = "main" }: AppProps) {
     await recordTaskOperation(slug, operation, snapshotTask(task)).catch(() => {});
     try {
       await mergeToMain(task.path, targetBranch, controller.signal);
+      await clearTaskPreview(slug, task.preview).catch(() => {});
       await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => {});
       const closedPaneCount = await closePaneIds(paneIdsToClose);
       if (closedPaneCount > 0 || paneIdsToClose.size === 0) {
@@ -2160,8 +2162,8 @@ export function App({ mainBranch = "main" }: AppProps) {
   async function doKill(slug: string) {
     dispatch({ type: "mode/killing" });
     try {
+      const task = state.tasks.find((t) => t.slug === slug);
       if (inSess) {
-        const task = state.tasks.find((t) => t.slug === slug);
         if (task?.paneId) {
           await closePaneById(task.paneId);
         } else {
@@ -2169,6 +2171,7 @@ export function App({ mainBranch = "main" }: AppProps) {
           await closePaneByName(slug);
         }
       }
+      await clearTaskPreview(slug, task?.preview).catch(() => {});
       await removeWorktree(slug);
       // Drop the state-file entry so a future task with the same slug
       // doesn't inherit the wrong agent kind.
