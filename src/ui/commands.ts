@@ -54,7 +54,13 @@ export function commandRows({
   rows.push(
     {
       key: "enter",
-      label: isLiveTask(task) ? "focus selected agent pane" : "resume selected task",
+      label:
+        task.state === "merging"
+          ? "merge running in background"
+          : isLiveTask(task)
+            ? "focus selected agent pane"
+            : "resume selected task",
+      muted: task.state === "merging",
     },
     {
       key: "i",
@@ -68,23 +74,30 @@ export function commandRows({
       label:
         task.state === "merged"
           ? "already applied"
+          : task.state === "merging"
+            ? "merge already running"
           : `review and apply to ${targetBranch}`,
-      muted: task.state === "merged",
+      muted: task.state === "merged" || task.state === "merging",
     },
     {
       key: "X",
       label:
         task.state === "merged"
           ? "kill unavailable after apply"
+          : task.state === "merging"
+            ? "kill unavailable while merging"
           : "kill selected task with confirmation",
-      muted: task.state === "merged",
+      muted: task.state === "merged" || task.state === "merging",
     },
     {
       key: "A",
       label:
-        lifecycleForTask(task) === "archived"
-          ? "restore archived task"
-          : "archive selected task",
+        task.state === "merging"
+          ? "archive unavailable while merging"
+          : lifecycleForTask(task) === "archived"
+            ? "restore archived task"
+            : "archive selected task",
+      muted: task.state === "merging",
     },
     { key: "t/f/d/l/a", label: "switch inspector mode" }
   );
@@ -138,8 +151,9 @@ export function helpSections(targetBranch: string): HelpSection[] {
         ["enter", "focus pane (live) · resume agent (ready)"],
         ["i", "send a one-line message to the selected agent"],
         ["m", `apply selected task to ${targetBranch} (review then confirm)`],
+        ["esc", "cancel the selected background merge"],
         ["s", `sync ${targetBranch} -> selected task (rebase)`],
-        ["A", "archive or restore selected ready/done task"],
+        ["A", "archive or restore selected ready/failed/done task"],
         ["X", "kill selected - close pane + remove worktree"],
         ["Q", "close all live agent panes (worktrees survive)"],
       ],

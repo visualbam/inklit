@@ -12,7 +12,7 @@ export function ConfirmPrompt({ action, slug, targetBranch = "main", busy, }) {
         ? "Closes the zellij pane and runs `wt remove -f -D` (force, even if unmerged)."
         : action === "closeAll"
             ? "Closes live zellij agent panes only. Worktrees and task records survive; enter resumes later."
-            : `Runs \`wt merge ${targetBranch}\` to apply this task (squash + remove on success).`;
+            : `Starts a background \`wt merge ${targetBranch}\` apply (squash + remove on success).`;
     return (React.createElement(Box, { borderStyle: "round", borderColor: color, paddingX: 1, flexDirection: "column" },
         React.createElement(Text, { bold: true, color: color }, busy
             ? `${verb}…`

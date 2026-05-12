@@ -6,6 +6,7 @@ export type TaskState =
   | "permission"
   | "idle"
   | "ready"
+  | "merging"
   | "failed"
   | "merged";
 
@@ -21,8 +22,23 @@ export type TaskLifecycle =
   | "ready"
   | "applying"
   | "done"
+  | "failed"
   | "archived"
   | "cancelled";
+
+export interface TaskOperation {
+  phase: "merge";
+  targetBranch: string;
+  startedAt: number;
+}
+
+export interface TaskFailure {
+  phase: "merge";
+  message: string;
+  details?: string;
+  targetBranch?: string;
+  at: number;
+}
 
 export interface ReviewStats {
   /** Final patch file count relative to the main version. */
@@ -54,6 +70,12 @@ export interface Task {
   paneId?: string;
   /** Per-task error from wt parsing or git probing; rendered inline. */
   error?: string;
+  /** Longer failure details shown in the inspector when an operation fails. */
+  errorDetail?: string;
+  /** Background operation currently being applied to this task. */
+  operation?: TaskOperation;
+  /** Persisted failure metadata for operation errors that need review. */
+  failure?: TaskFailure;
   /** Working tree dirty flag, surfaced as a glyph. */
   dirty: boolean;
   /** Compact review-readiness counts for the task board. */
@@ -99,7 +121,6 @@ export interface AppState {
     | "confirmMerge"
     | "confirmKill"
     | "confirmCloseAll"
-    | "merging"
     | "syncing"
     | "killing"
     | "closingAll"
@@ -165,10 +186,12 @@ export function lifecycleForState(state: TaskState): TaskLifecycle {
       return "active";
     case "ready":
       return "ready";
+    case "merging":
+      return "applying";
     case "merged":
       return "done";
     case "failed":
-      return "cancelled";
+      return "failed";
   }
 }
 

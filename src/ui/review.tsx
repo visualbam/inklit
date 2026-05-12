@@ -12,6 +12,8 @@ export interface ReviewBadge {
 
 export function reviewBadges(task: Task): ReviewBadge[] {
   if (task.state === "merged") return [{ label: "applied", dim: true }];
+  if (task.state === "merging") return [{ label: "merging", color: UI.warning }];
+  if (task.failure) return [{ label: "merge failed", color: UI.danger }];
   const stats = task.review;
   if (!stats) return [{ label: "checking", dim: true }];
   if (stats.files === 0 && stats.commitsAhead === 0 && stats.untracked === 0) {
@@ -54,6 +56,11 @@ export function reviewSummary(task: Task): string {
 
 export function reviewSentence(task: Task): string {
   if (task.state === "merged") return "Applied to the target branch.";
+  if (task.state === "merging") {
+    const target = task.operation?.targetBranch ?? "target branch";
+    return `Background merge to ${target} is running.`;
+  }
+  if (task.failure) return `Merge failed: ${task.failure.message}`;
   const stats = task.review;
   if (!stats) return "Review stats are still being sampled.";
   if (stats.files === 0 && stats.commitsAhead === 0 && stats.untracked === 0) {

@@ -136,7 +136,7 @@ Movement is Vim/Helix-flavored.
 | `i`      | send a one-line message into the selected agent's pane (Enter sends + presses return; esc cancels) |
 | `q` / `Ctrl-C` | exit the dashboard only; live agents keep running in zellij |
 | `Q`      | close all live agent panes after confirmation; worktrees survive |
-| `m`      | apply selected task to the target branch — switches inspector to diff and asks y/n |
+| `m`      | apply selected task to the target branch — switches inspector to diff and asks y/n, then merges in background |
 | `A`      | archive/restore a ready, failed, or recently applied task without deleting the worktree |
 | `X`      | kill selected task — close pane + remove worktree (with y/n confirm) |
 | `t`      | inspector → task view (status, next action, checkpoint)      |
@@ -147,6 +147,7 @@ Movement is Vim/Helix-flavored.
 | `?`      | help overlay (toggle — `?` / esc / q to close)             |
 | `/`      | filter task list by slug, subject, lifecycle, pane state, or path |
 | `r`      | force refresh task board and visible inspector caches       |
+| `esc`    | cancel the selected background merge, when one is running   |
 
 ### Task Lifecycle
 
@@ -155,10 +156,11 @@ the current review/apply target when it differs, and the checkout path that
 receives applied task work. The task list shows two separate concepts:
 
 - **stage** is the Replit-style task lifecycle: `active` while an agent pane is
-  live, `ready` when work is available for review without a live pane, and
-  `done` for recently applied work.
-- **pane** is the local zellij/process state: `running`, `waiting`, `idle`, or
-  `no pane`.
+  live, `ready` when work is available for review without a live pane,
+  `applying` while a background merge is running, `failed` when an apply
+  operation needs attention, and `done` for recently applied work.
+- **pane** is the local zellij/process state: `running`, `waiting`, `idle`,
+  `no pane`, or `merging` for a background apply job.
 - **review** is a readable readiness summary. The underlying counts are changed
   files, commits ahead, and untracked files, rendered as badges such as
   `3 files`, `2 commits`, and `1 untracked`.
@@ -166,12 +168,12 @@ receives applied task work. The task list shows two separate concepts:
   recently applied `done` rows. Press `T`/`1` or `2` to launch one through the
   normal agent picker.
 
-The board is grouped by urgency (`Waiting`, `Running`, `Idle`, `Ready`,
-`Failed`, `Done`, then archived rows when visible). Press `v` to switch between
-the detailed table and compact two-line task cards; inklit remembers that
-layout across restarts. When the board outgrows the pane, it keeps the selected
-task inside the visible window and shows hidden-task markers above or below
-instead of letting the inspector cover task rows.
+The board is grouped by urgency (`Waiting`, `Running`, `Idle`, `Merging`,
+`Ready`, `Failed`, `Done`, then archived rows when visible). Press `v` to
+switch between the detailed table and compact two-line task cards; inklit
+remembers that layout across restarts. When the board outgrows the pane, it
+keeps the selected task inside the visible window and shows hidden-task markers
+above or below instead of letting the inspector cover task rows.
 
 ### Pane Icons
 
@@ -180,12 +182,14 @@ instead of letting the inspector cover task rows.
 | ●    | running  | a zellij pane named after the slug is alive              |
 | ◐    | idle     | running pane whose viewport hasn't changed for ≥30s — labelled `idle 1m` etc. |
 | ✓    | no pane  | worktree exists, no live pane; `enter` resumes           |
+| ↻    | merging  | background apply job is merging into the target branch   |
 | ⊙    | waiting  | running pane whose tail looks like a `(y/n)`/`?`/`❯` prompt |
-| ✗    | failed   | *not yet detected — needs exit-code state file*          |
+| ✗    | failed   | apply failed or the task is otherwise marked failed; task view shows details |
 | ·    | applied  | task was applied and remains visible briefly before fade-out |
 
-Tasks are sorted by urgency: `waiting`, `running`, `idle`, `ready`, `failed`,
-recently applied `done` rows, then archived/cancelled rows when visible.
+Tasks are sorted by urgency: `waiting`, `running`, `idle`, `merging`, `ready`,
+`failed`, recently applied `done` rows, then archived/cancelled rows when
+visible.
 
 ### Notifications
 
@@ -296,13 +300,19 @@ The bottom half of the screen is the inspector. Toggle with `t`/`f`/`d`/`l`/`a`:
 
 The diff and files views also drive the apply flow: pressing `m` jumps
 the inspector to **diff** mode automatically and shows a confirm bar at the
-bottom. You see exactly what you're about to apply before pressing `y`.
+bottom. You see exactly what you're about to apply before pressing `y`; after
+confirmation the merge runs in the background and the row changes to
+`applying` / `merging`.
 
 ### Destructive actions
 
-`m` runs `wt -C <worktree> merge <target> -y` to apply the task into the
-target branch (squash + auto-remove on success). The default target is `main`;
-override it with `inklit --main <branch>` or `INKLIT_MAIN_BRANCH=<branch>`.
+`m` runs `wt -C <worktree> merge <target> -y` in the background to apply the
+task into the target branch (squash + auto-remove on success). The default
+target is `main`; override it with `inklit --main <branch>` or
+`INKLIT_MAIN_BRANCH=<branch>`. Merge conflicts are handled by the existing
+Claude/Codex resolver path when possible. If apply still fails, the task stays
+on the board as `failed`; open the task inspector to read the stored failure
+details, then press `m` to retry or `X` to discard.
 `X` focuses the pane → `zellij action close-pane` → `wt remove <slug> -y -f -D`
 (force the worktree gone even with uncommitted changes; force-delete the
 branch even if unapplied). Both prompt for `y`/`n` first; `esc` cancels. `m`
@@ -320,7 +330,7 @@ rows and press `A` again to restore one.
 
 ## Limitations & TODOs (phase 2)
 
-- [ ] `failed` state detection (track pane exit codes in
+- [ ] agent-pane `failed` state detection (track pane exit codes in
       `$XDG_STATE_HOME/inklit/exits.json`).
 - [ ] Add a Replit-style contextual composer: keep `n` for manual task creation,
       keep power-user shortcuts, and add a single opt-in input (likely `space`)

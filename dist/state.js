@@ -61,6 +61,8 @@ export async function recordSpawn(slug, agent, paneId) {
             paneId: paneId ?? state.tasks[slug]?.paneId,
             lifecycle: "active",
             lifecycleAt: now,
+            operation: undefined,
+            failure: undefined,
         };
     });
 }
@@ -76,6 +78,8 @@ export async function recordResume(slug, agent, paneId) {
             paneId: paneId ?? existing.paneId,
             lifecycle: "active",
             lifecycleAt: now,
+            operation: undefined,
+            failure: undefined,
         };
     });
 }
@@ -90,6 +94,7 @@ export async function recordLifecycle(slug, lifecycle, snapshot) {
                 lifecycle: undefined,
                 lifecycleAt: undefined,
                 snapshot: undefined,
+                operation: undefined,
             };
             return;
         }
@@ -97,6 +102,36 @@ export async function recordLifecycle(slug, lifecycle, snapshot) {
             ...existing,
             lifecycle,
             lifecycleAt: now,
+            snapshot: snapshot ?? existing.snapshot,
+            operation: lifecycle === "done" ? undefined : existing.operation,
+            failure: lifecycle === "done" ? undefined : existing.failure,
+        };
+    });
+}
+/** Persist a background operation marker so polling can keep the task visible. */
+export async function recordTaskOperation(slug, operation, snapshot) {
+    await withState((state) => {
+        const existing = state.tasks[slug] ?? { spawnedAt: operation.startedAt };
+        state.tasks[slug] = {
+            ...existing,
+            lifecycle: "applying",
+            lifecycleAt: operation.startedAt,
+            operation,
+            failure: undefined,
+            snapshot: snapshot ?? existing.snapshot,
+        };
+    });
+}
+/** Persist a task operation failure so the inspector can explain what happened. */
+export async function recordTaskFailure(slug, failure, snapshot) {
+    await withState((state) => {
+        const existing = state.tasks[slug] ?? { spawnedAt: failure.at };
+        state.tasks[slug] = {
+            ...existing,
+            lifecycle: "failed",
+            lifecycleAt: failure.at,
+            operation: undefined,
+            failure,
             snapshot: snapshot ?? existing.snapshot,
         };
     });

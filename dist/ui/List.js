@@ -281,6 +281,8 @@ function groupForTask(task) {
             return { key: "running", label: "Running", color: UI.accent };
         case "idle":
             return { key: "idle", label: "Idle", color: UI.info };
+        case "merging":
+            return { key: "merging", label: "Merging", color: UI.warning };
         case "ready":
             return { key: "ready", label: "Ready", color: UI.success };
         case "failed":

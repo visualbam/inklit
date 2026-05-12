@@ -627,6 +627,22 @@ async function conflictedFiles(repoPath: string): Promise<string[]> {
   return stdout.split("\n").filter(Boolean);
 }
 
+function containsConflictMarkers(content: string): boolean {
+  return /^(<<<<<<<|=======|>>>>>>>)(?:\s|$)/m.test(content);
+}
+
+async function filesWithConflictMarkers(
+  repoPath: string,
+  files: string[]
+): Promise<string[]> {
+  const marked: string[] = [];
+  for (const file of files) {
+    const content = await readFile(path.join(repoPath, file), "utf8");
+    if (containsConflictMarkers(content)) marked.push(file);
+  }
+  return marked;
+}
+
 // Per-file budget for the AI conflict resolvers. Without these, a hung CLI
 // (auth prompt, slow generation, stalled network) would freeze the merge with
 // no way for the user to recover.
@@ -658,7 +674,8 @@ async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise
       const fullPath = path.join(repoPath, file);
       const content = await readFile(fullPath, "utf8");
       const prompt =
-        `Resolve all git conflict markers in this file. Keep the best of both sides. ` +
+        `Resolve all git conflict markers in this file. Choose the semantically correct result, ` +
+        `preserve the intended behavior from both sides when compatible, and do not leave any conflict markers. ` +
         `Return ONLY the resolved file content — no explanation, no markdown, no code fences.\n\n${content}`;
       const { stdout } = await execa(
         "claude", ["-p", prompt, "--output-format", "text", "--bare"],
@@ -669,6 +686,9 @@ async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise
           ...detachedAiOptions,
         }
       );
+      if (containsConflictMarkers(stdout)) {
+        throw new Error(`Claude left conflict markers in ${file}`);
+      }
       await writeFile(fullPath, stdout);
       await execa("git", ["-C", repoPath, "add", file], { cancelSignal: signal });
     } catch (err) {
@@ -685,7 +705,8 @@ async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise
   if (remaining.length === 0) return;
   const prompt =
     `Resolve all git conflict markers in these files: ${remaining.join(", ")}. ` +
-    `Keep the best of both sides for each conflict. Edit the files in place.`;
+    `Choose the semantically correct result for each conflict, preserve compatible intent from both sides, ` +
+    `remove every conflict marker, and edit the files in place.`;
   await execa("codex", ["exec", prompt], {
     cwd: repoPath,
     reject: true,
@@ -693,7 +714,19 @@ async function resolveConflicts(repoPath: string, signal?: AbortSignal): Promise
     cancelSignal: signal,
     ...detachedAiOptions,
   });
+  const stillMarked = await filesWithConflictMarkers(repoPath, remaining);
+  if (stillMarked.length > 0) {
+    throw new Error(
+      `AI conflict resolver left conflict markers in ${stillMarked.join(", ")}`
+    );
+  }
   await execa("git", ["-C", repoPath, "add", ...remaining], { cancelSignal: signal });
+  const stillUnmerged = await conflictedFiles(repoPath);
+  if (stillUnmerged.length > 0) {
+    throw new Error(
+      `AI conflict resolver left unmerged files: ${stillUnmerged.join(", ")}`
+    );
+  }
 }
 
 /**

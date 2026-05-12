@@ -82,6 +82,8 @@ function nextAction(task: Task | null, inSession: boolean): string {
   }
   if (task.state === "idle") return "Next: inspect idle agent with a";
   if (task.state === "ready") return "Next: review diff or T follow-up";
+  if (task.state === "merging") return "Next: merge running in background";
+  if (task.failure) return "Next: inspect merge failure or press m to retry";
   if (task.state === "merged") return "Next: T follow-up or let it fade out";
   return "Next: inspect task";
 }

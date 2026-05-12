@@ -25,10 +25,12 @@ export function lifecycleForState(state) {
             return "active";
         case "ready":
             return "ready";
+        case "merging":
+            return "applying";
         case "merged":
             return "done";
         case "failed":
-            return "cancelled";
+            return "failed";
     }
 }
 export function lifecycleForTask(task) {

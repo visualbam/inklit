@@ -51,6 +51,8 @@ import {
   clearPane,
   recordRemove,
   recordLifecycle,
+  recordTaskFailure,
+  recordTaskOperation,
   recordListDensity,
   loadUiPrefs,
   snapshotTask,
@@ -64,8 +66,10 @@ import type {
   MainVersion,
   ReviewStats,
   Task,
+  TaskFailure,
   TaskLifecycle,
   TaskListDensity,
+  TaskOperation,
   TaskState,
 } from "../model.js";
 import { initialState, lifecycleForTask } from "../model.js";
@@ -99,7 +103,6 @@ type Action =
   | { type: "mode/confirmMerge" }
   | { type: "mode/confirmKill" }
   | { type: "mode/confirmCloseAll" }
-  | { type: "mode/merging" }
   | { type: "mode/syncing" }
   | { type: "mode/killing" }
   | { type: "mode/closingAll" }
@@ -123,6 +126,9 @@ type Action =
   | { type: "filter/set"; value: string }
   | { type: "filter/clear" }
   | { type: "task/reviewStats"; slug: string; stats: ReviewStats }
+  | { type: "task/operation"; slug: string; operation: TaskOperation }
+  | { type: "task/operationCleared"; slug: string }
+  | { type: "task/failure"; slug: string; failure: TaskFailure }
   | { type: "task/merged"; slug: string; task: Task }
   | { type: "task/lifecycle"; slug: string; lifecycle: TaskLifecycle | undefined; lifecycleAt?: number }
   | { type: "flash"; message: string | null }
@@ -184,12 +190,14 @@ function urgencyRank(task: Pick<Task, "state"> & { lifecycle?: TaskLifecycle }):
       return 2;
     case "idle":
       return 3;
-    case "ready":
+    case "merging":
       return 4;
-    case "failed":
+    case "ready":
       return 5;
-    case "merged":
+    case "failed":
       return 6;
+    case "merged":
+      return 7;
   }
 }
 
@@ -203,6 +211,10 @@ function matchesFilter(task: Task, query: string): boolean {
     task.state,
     lifecycleForTask(task),
     task.shortSha,
+    task.error,
+    task.errorDetail,
+    task.operation?.targetBranch,
+    task.failure?.message,
   ]
     .join(" ")
     .toLowerCase();
@@ -253,7 +265,7 @@ function totalLinesFor(s: RenderState): number {
   if (!slug) return 0;
   if (s.inspectorMode === "task") {
     const task = s.tasks.find((t) => t.slug === slug) ?? null;
-    return 9 + suggestedFollowUps(task).length;
+    return 9 + failureDetailLineCount(task) + suggestedFollowUps(task).length;
   }
   const c = s.content.get(slug);
   if (!c) return 0;
@@ -267,6 +279,16 @@ function totalLinesFor(s: RenderState): number {
     case "files":
       return c.files.length;
   }
+}
+
+function failureDetailLineCount(task: Task | null): number {
+  if (!task || (!task.failure && !task.error)) return 0;
+  const details = (task.errorDetail ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8).length;
+  return 1 + (task.failure?.targetBranch ? 1 : 0) + details;
 }
 
 /** Resolve stored offset to an effective top-line index for the viewport. */
@@ -353,8 +375,6 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, mode: "confirmKill", inspectorMode: "diff" };
     case "mode/confirmCloseAll":
       return { ...s, mode: "confirmCloseAll" };
-    case "mode/merging":
-      return { ...s, mode: "merging" };
     case "mode/syncing":
       return { ...s, mode: "syncing" };
     case "mode/killing":
@@ -443,6 +463,73 @@ function reducer(s: RenderState, a: Action): RenderState {
         t.slug === a.slug ? { ...t, review: a.stats } : t
       );
       return { ...s, tasks };
+    }
+    case "task/operation": {
+      const tasks = sortTasks(
+        s.tasks.map((t) =>
+          t.slug === a.slug
+            ? {
+                ...t,
+                state: "merging",
+                lifecycle: "applying",
+                lifecycleAt: a.operation.startedAt,
+                operation: a.operation,
+                failure: undefined,
+                error: undefined,
+                errorDetail: undefined,
+              }
+            : t
+        )
+      );
+      return { ...s, tasks };
+    }
+    case "task/operationCleared": {
+      const tasks = sortTasks(
+        s.tasks.map((t) =>
+          t.slug === a.slug
+            ? {
+                ...t,
+                state: "ready",
+                lifecycle: undefined,
+                lifecycleAt: undefined,
+                operation: undefined,
+                failure: undefined,
+                error: undefined,
+                errorDetail: undefined,
+              }
+            : t
+        )
+      );
+      return { ...s, tasks };
+    }
+    case "task/failure": {
+      const tasks = sortTasks(
+        s.tasks.map((t) =>
+          t.slug === a.slug
+            ? {
+                ...t,
+                state: "failed",
+                lifecycle: "failed",
+                lifecycleAt: a.failure.at,
+                operation: undefined,
+                failure: a.failure,
+                error: a.failure.message,
+                errorDetail: a.failure.details,
+              }
+            : t
+        )
+      );
+      return {
+        ...s,
+        tasks,
+        inspectorMode: "task",
+        selectedSlug: keepVisibleSelection(
+          s.selectedSlug,
+          tasks,
+          s.filterQuery,
+          s.showArchived
+        ),
+      };
     }
     case "task/merged": {
       const tasks = sortTasks(
@@ -594,6 +681,34 @@ function applyPersistedLifecycle(task: Task, record?: TaskRecord): Task {
       ...task,
       lifecycle: record.lifecycle,
       lifecycleAt: record.lifecycleAt,
+      failure: record.failure,
+      error: record.failure?.message ?? task.error,
+      errorDetail: record.failure?.details ?? task.errorDetail,
+    };
+  }
+  if (record?.operation?.phase === "merge") {
+    return {
+      ...task,
+      state: "merging",
+      lifecycle: "applying",
+      lifecycleAt: record.operation.startedAt,
+      operation: record.operation,
+      failure: undefined,
+      error: undefined,
+      errorDetail: undefined,
+    };
+  }
+  if (record?.failure?.phase === "merge" || record?.lifecycle === "failed") {
+    const failure = record.failure;
+    return {
+      ...task,
+      state: "failed",
+      lifecycle: "failed",
+      lifecycleAt: failure?.at ?? record.lifecycleAt,
+      operation: undefined,
+      failure,
+      error: failure?.message ?? task.error ?? "Task operation failed.",
+      errorDetail: failure?.details ?? task.errorDetail,
     };
   }
   return task;
@@ -610,6 +725,58 @@ function isLivePane(s: TaskState): boolean {
 
 function screenTail(text: string): string {
   return agentTranscriptTail(text, AGENT_TAIL_LINES);
+}
+
+function processOutputLine(text: string): string | null {
+  const line = text
+    .replace(/^[✗✓◎→↳\s]+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return line.length > 0 ? line : null;
+}
+
+function firstMeaningfulLine(text: string): string | null {
+  return (
+    text
+      .split("\n")
+      .map(processOutputLine)
+      .find((line): line is string => !!line) ?? null
+  );
+}
+
+function mergeFailureFromError(
+  err: unknown,
+  targetBranch: string
+): TaskFailure {
+  const base = err instanceof Error ? err.message : String(err);
+  const stderr =
+    typeof (err as { stderr?: unknown }).stderr === "string"
+      ? ((err as { stderr: string }).stderr)
+      : "";
+  const stdout =
+    typeof (err as { stdout?: unknown }).stdout === "string"
+      ? ((err as { stdout: string }).stdout)
+      : "";
+  const output = [stderr, stdout].filter(Boolean).join("\n").trim();
+  const firstOutputLine = output ? firstMeaningfulLine(output) : null;
+  const message =
+    firstOutputLine && !base.includes(firstOutputLine)
+      ? `${base}: ${firstOutputLine}`
+      : base;
+  const details = [
+    base,
+    stderr ? `stderr:\n${stderr.trim()}` : "",
+    stdout ? `stdout:\n${stdout.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return {
+    phase: "merge",
+    targetBranch,
+    at: Date.now(),
+    message,
+    details: details || undefined,
+  };
 }
 
 /**
@@ -658,8 +825,20 @@ export function App({ mainBranch = "main" }: AppProps) {
   const notifiedIdleRef = useRef(new Set<string>());
   /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
   const closingAllRef = useRef(false);
-  // Cancels the in-flight merge or sync subprocess chain (Esc during merging/syncing).
-  const mergeAbortRef = useRef<AbortController | null>(null);
+  // Only one apply job can touch the target checkout at a time.
+  const applyAbortRef = useRef<AbortController | null>(null);
+  const applySlugRef = useRef<string | null>(null);
+  // Cancels the in-flight sync subprocess chain (Esc during syncing).
+  const syncAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      const slug = applySlugRef.current;
+      applyAbortRef.current?.abort();
+      syncAbortRef.current?.abort();
+      if (slug) void recordLifecycle(slug, null).catch(() => {});
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1006,6 +1185,7 @@ export function App({ mainBranch = "main" }: AppProps) {
 
     const due = (task: Task, now: number) => {
       if (task.state === "merged") return false;
+      if (task.state === "merging") return false;
       const cached = reviewStatsRef.current.get(task.slug);
       return !cached || now - cached.lastProbeMs >= REVIEW_STATS_POLL_MS;
     };
@@ -1029,7 +1209,9 @@ export function App({ mainBranch = "main" }: AppProps) {
 
     const tick = async () => {
       const now = Date.now();
-      const tasks = latestTasksRef.current.filter((t) => t.state !== "merged");
+      const tasks = latestTasksRef.current.filter(
+        (t) => t.state !== "merged" && t.state !== "merging"
+      );
       const selectedSlug = latestSelectedSlugRef.current;
       const selected = tasks.find((t) => t.slug === selectedSlug) ?? null;
       const toProbe: Task[] = [];
@@ -1158,16 +1340,12 @@ export function App({ mainBranch = "main" }: AppProps) {
       }
       if (state.mode === "spawning") return;
       if (
-        state.mode === "merging" ||
         state.mode === "syncing" ||
         state.mode === "killing" ||
         state.mode === "closingAll"
       ) {
-        if (
-          key.escape &&
-          (state.mode === "merging" || state.mode === "syncing")
-        ) {
-          mergeAbortRef.current?.abort();
+        if (key.escape && state.mode === "syncing") {
+          syncAbortRef.current?.abort();
         }
         return;
       }
@@ -1256,6 +1434,18 @@ export function App({ mainBranch = "main" }: AppProps) {
           return;
         }
         return;
+      }
+
+      if (key.escape) {
+        const selected = state.tasks.find((t) => t.slug === state.selectedSlug);
+        if (
+          selected?.state === "merging" &&
+          applySlugRef.current === selected.slug
+        ) {
+          applyAbortRef.current?.abort();
+          dispatch({ type: "flash", message: `Cancelling merge for ${selected.slug}…` });
+          return;
+        }
       }
 
       // gg chord — now scrolls inspector to top instead of jumping list selection.
@@ -1511,6 +1701,13 @@ export function App({ mainBranch = "main" }: AppProps) {
       dispatch({ type: "flash", message: `${slug} is already applied.` });
       return;
     }
+    if (task?.state === "merging") {
+      dispatch({
+        type: "flash",
+        message: `${slug} is merging in the background.`,
+      });
+      return;
+    }
     if (task && isLivePane(task.state)) {
       const focusP = task.paneId ? focusPaneId(task.paneId) : focusPaneByName(slug);
       focusP.then((ok) => {
@@ -1531,6 +1728,20 @@ export function App({ mainBranch = "main" }: AppProps) {
       });
       return;
     }
+    if (task?.state === "merging") {
+      dispatch({
+        type: "flash",
+        message: `${state.selectedSlug} is already merging.`,
+      });
+      return;
+    }
+    if (applyAbortRef.current) {
+      dispatch({
+        type: "flash",
+        message: `Merge already running for ${applySlugRef.current ?? "another task"}.`,
+      });
+      return;
+    }
     dispatch({ type: "mode/confirmMerge" });
   }
 
@@ -1541,6 +1752,13 @@ export function App({ mainBranch = "main" }: AppProps) {
       dispatch({
         type: "flash",
         message: `${state.selectedSlug} is already applied.`,
+      });
+      return;
+    }
+    if (task?.state === "merging") {
+      dispatch({
+        type: "flash",
+        message: `${state.selectedSlug} is merging; wait for it to finish or press esc to cancel.`,
       });
       return;
     }
@@ -1646,9 +1864,32 @@ export function App({ mainBranch = "main" }: AppProps) {
   async function doMerge(slug: string) {
     const task = state.tasks.find((t) => t.slug === slug);
     if (!task) return;
-    dispatch({ type: "mode/merging" });
+    if (task.state === "merging") {
+      dispatch({ type: "flash", message: `${slug} is already merging.` });
+      return;
+    }
+    if (applyAbortRef.current) {
+      dispatch({
+        type: "flash",
+        message: `Merge already running for ${applySlugRef.current ?? "another task"}.`,
+      });
+      return;
+    }
     const controller = new AbortController();
-    mergeAbortRef.current = controller;
+    const operation: TaskOperation = {
+      phase: "merge",
+      targetBranch,
+      startedAt: Date.now(),
+    };
+    applyAbortRef.current = controller;
+    applySlugRef.current = slug;
+    dispatch({ type: "mode/list" });
+    dispatch({ type: "task/operation", slug, operation });
+    dispatch({
+      type: "flash",
+      message: `Merging ${slug} → ${targetBranch} in background.`,
+    });
+    await recordTaskOperation(slug, operation, snapshotTask(task)).catch(() => {});
     try {
       await mergeToMain(task.path, targetBranch, controller.signal);
       await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => {});
@@ -1667,30 +1908,49 @@ export function App({ mainBranch = "main" }: AppProps) {
       });
       reviewStatsRef.current.delete(slug);
       dispatch({ type: "task/merged", slug, task: mergedTask });
-      dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Applied ${slug} → ${targetBranch}` });
+      refreshProjectRef.current();
     } catch (err) {
-      dispatch({ type: "mode/list" });
-      const base = err instanceof Error ? err.message : String(err);
-      const firstStderrLine = (err as { stderr?: string }).stderr
-        ?.split("\n")
-        .map((l) => l.replace(/^[✗✓◎→↳\s]+/, "").trim())
-        .find((l) => l.length > 0);
+      if (controller.signal.aborted) {
+        await recordLifecycle(slug, null).catch(() => {});
+        dispatch({ type: "task/operationCleared", slug });
+        dispatch({ type: "flash", message: `Cancelled merge for ${slug}.` });
+        refreshProjectRef.current();
+        return;
+      }
+      const failure = mergeFailureFromError(err, targetBranch);
+      await recordTaskFailure(slug, failure, snapshotTask(task)).catch(() => {});
+      dispatch({ type: "task/failure", slug, failure });
       dispatch({
         type: "error",
-        message: firstStderrLine ? `${base}: ${firstStderrLine}` : base,
+        message: failure.message,
       });
+      refreshProjectRef.current();
     } finally {
-      if (mergeAbortRef.current === controller) mergeAbortRef.current = null;
+      if (applyAbortRef.current === controller) {
+        applyAbortRef.current = null;
+        applySlugRef.current = null;
+      }
     }
   }
 
   async function doSync(slug: string) {
     const task = state.tasks.find((t) => t.slug === slug);
     if (!task) return;
+    if (task.state === "merging") {
+      dispatch({ type: "flash", message: `${slug} is already merging.` });
+      return;
+    }
+    if (applyAbortRef.current) {
+      dispatch({
+        type: "flash",
+        message: `Merge already running for ${applySlugRef.current ?? "another task"}.`,
+      });
+      return;
+    }
     dispatch({ type: "mode/syncing" });
     const controller = new AbortController();
-    mergeAbortRef.current = controller;
+    syncAbortRef.current = controller;
     try {
       await syncFromMain(task.path, targetBranch, controller.signal);
       dispatch({ type: "mode/list" });
@@ -1707,7 +1967,7 @@ export function App({ mainBranch = "main" }: AppProps) {
         message: firstStderrLine ? `${base}: ${firstStderrLine}` : base,
       });
     } finally {
-      if (mergeAbortRef.current === controller) mergeAbortRef.current = null;
+      if (syncAbortRef.current === controller) syncAbortRef.current = null;
     }
   }
 
@@ -1717,6 +1977,13 @@ export function App({ mainBranch = "main" }: AppProps) {
     const task = state.tasks.find((t) => t.slug === slug);
     if (!task) return;
     const archived = lifecycleForTask(task) === "archived";
+    if (!archived && task.state === "merging") {
+      dispatch({
+        type: "flash",
+        message: "Archive is unavailable while a merge is running.",
+      });
+      return;
+    }
     if (!archived && isLivePane(task.state)) {
       dispatch({
         type: "flash",
@@ -1920,10 +2187,9 @@ export function App({ mainBranch = "main" }: AppProps) {
     state.mode === "confirmMerge" ||
     state.mode === "confirmKill" ||
     state.mode === "confirmCloseAll" ||
-    state.mode === "merging" ||
-      state.mode === "syncing" ||
-      state.mode === "killing" ||
-      state.mode === "closingAll";
+    state.mode === "syncing" ||
+    state.mode === "killing" ||
+    state.mode === "closingAll";
   const showSendInput = state.mode === "sendInput" || state.mode === "sending";
   const showFilter = state.mode === "filter";
   // Bordered prompt + title + hint + input/confirm row. The explicit slot
@@ -2092,7 +2358,6 @@ export function App({ mainBranch = "main" }: AppProps) {
                   : state.selectedSlug ?? ""
               }
               busy={
-                state.mode === "merging" ||
                 state.mode === "syncing" ||
                 state.mode === "killing" ||
                 state.mode === "closingAll"

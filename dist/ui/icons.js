@@ -5,6 +5,7 @@ export const STATE_ICON = {
     permission: "!",
     idle: "◐",
     ready: "✓",
+    merging: "↻",
     failed: "✗",
     merged: "·",
 };
@@ -14,6 +15,7 @@ export const STATE_COLOR = {
     permission: UI.danger,
     idle: UI.info,
     ready: UI.success,
+    merging: UI.warning,
     failed: UI.danger,
     merged: UI.subtle,
 };
@@ -23,6 +25,7 @@ export const STATE_LABEL = {
     permission: "permission",
     idle: "idle",
     ready: "no pane",
+    merging: "merging",
     failed: "failed",
     merged: "applied",
 };
@@ -33,6 +36,7 @@ export const LIFECYCLE_LABEL = {
     ready: "ready",
     applying: "applying",
     done: "done",
+    failed: "failed",
     archived: "archived",
     cancelled: "cancelled",
 };
@@ -43,6 +47,7 @@ export const LIFECYCLE_COLOR = {
     ready: UI.success,
     applying: UI.warning,
     done: UI.subtle,
+    failed: UI.danger,
     archived: UI.subtle,
     cancelled: UI.danger,
 };

@@ -14,6 +14,8 @@ import {
   recordRemove,
   recordResume,
   recordSpawn,
+  recordTaskFailure,
+  recordTaskOperation,
   type TaskSnapshot,
 } from "../src/state.js";
 
@@ -62,9 +64,33 @@ test("state records spawn, resume, panes, lifecycle, and removal", async () => {
     assert.equal((await loadAll())["task-a"]?.lifecycle, "done");
     assert.equal((await loadAll())["task-a"]?.snapshot?.shortSha, "abc123");
 
+    await recordTaskOperation(
+      "task-a",
+      { phase: "merge", targetBranch: "develop", startedAt: 123 },
+      snapshot
+    );
+    assert.equal((await loadAll())["task-a"]?.lifecycle, "applying");
+    assert.equal((await loadAll())["task-a"]?.operation?.targetBranch, "develop");
+
+    await recordTaskFailure(
+      "task-a",
+      {
+        phase: "merge",
+        targetBranch: "develop",
+        message: "merge failed",
+        details: "conflict in src/app.ts",
+        at: 456,
+      },
+      snapshot
+    );
+    assert.equal((await loadAll())["task-a"]?.lifecycle, "failed");
+    assert.equal((await loadAll())["task-a"]?.operation, undefined);
+    assert.equal((await loadAll())["task-a"]?.failure?.message, "merge failed");
+
     await recordLifecycle("task-a", null);
     assert.equal((await loadAll())["task-a"]?.lifecycle, undefined);
     assert.equal((await loadAll())["task-a"]?.snapshot, undefined);
+    assert.equal((await loadAll())["task-a"]?.operation, undefined);
 
     await clearPane("task-a");
     assert.equal((await loadAll())["task-a"]?.paneId, undefined);

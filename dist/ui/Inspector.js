@@ -57,7 +57,11 @@ function ModeTabs({ active }) {
 function TaskStatusStrip({ task, targetBranch, width, }) {
     const lifecycle = lifecycleForTask(task);
     const label = LIFECYCLE_LABEL[lifecycle];
-    const line = `${label} task · ${paneSummary(task)} · ${task.dirty ? "changes pending review" : "clean worktree"} · ${nextAction(task, targetBranch)}`;
+    const line = `${label} task · ${paneSummary(task)} · ${task.state === "merging"
+        ? "applying in background"
+        : task.dirty
+            ? "changes pending review"
+            : "clean worktree"} · ${nextAction(task, targetBranch)}`;
     return (React.createElement(Box, null,
         React.createElement(Text, { color: LIFECYCLE_COLOR[lifecycle] }, label),
         React.createElement(Text, { dimColor: true },
@@ -92,6 +96,9 @@ function TaskOverview({ task, targetBranch, maxLines, offset, width, }) {
         ],
         ["Worktree", task.path],
     ];
+    const failureRows = failureDetailRows(task);
+    if (failureRows.length > 0)
+        rows.splice(2, 0, ...failureRows);
     const followUps = suggestedFollowUps(task);
     if (followUps[0]) {
         rows.push([
@@ -125,13 +132,15 @@ function TaskOverview({ task, targetBranch, maxLines, offset, width, }) {
 function TaskTimeline({ task }) {
     const lifecycle = lifecycleForTask(task);
     const active = lifecycle === "done" || task.state === "merged"
-        ? 3
-        : lifecycle === "ready" || task.state === "ready" || task.state === "idle"
-            ? 2
-            : lifecycle === "archived" || lifecycle === "cancelled"
-                ? 4
-                : 1;
-    const steps = ["spawned", "working", "review", "applied"];
+        ? 4
+        : lifecycle === "applying" || task.state === "merging"
+            ? 3
+            : lifecycle === "ready" || task.state === "ready" || task.state === "idle"
+                ? 2
+                : lifecycle === "archived" || lifecycle === "cancelled" || lifecycle === "failed"
+                    ? 5
+                    : 1;
+    const steps = ["spawned", "working", "review", "apply", "done"];
     return (React.createElement(Box, null,
         React.createElement(Text, { color: UI.accent }, padRight("Flow", 10)),
         steps.map((step, index) => {
@@ -141,13 +150,15 @@ function TaskTimeline({ task }) {
                 index > 0 ? " -> " : "",
                 step));
         }),
-        active === 4 ? (React.createElement(Text, { color: lifecycle === "cancelled" ? UI.danger : UI.subtle },
+        active === 5 ? (React.createElement(Text, { color: lifecycle === "failed" || lifecycle === "cancelled" ? UI.danger : UI.subtle },
             " -> ",
             lifecycle)) : null));
 }
 function paneSummary(task) {
     if (task.state === "ready")
         return "no live pane";
+    if (task.state === "merging")
+        return "background merge";
     if (task.state === "permission")
         return "permission prompt";
     if (task.state === "waiting")
@@ -172,9 +183,33 @@ function nextAction(task, targetBranch) {
     if (task.state === "ready") {
         return `Review the diff, apply to ${targetBranch} with m, or enter to resume.`;
     }
+    if (task.state === "merging") {
+        return `Merge to ${task.operation?.targetBranch ?? targetBranch} is running; keep working or press esc to cancel.`;
+    }
+    if (task.failure) {
+        return `Review the failure below, then press m to retry or X to discard.`;
+    }
     if (task.state === "merged")
         return `Task has been applied to ${targetBranch}.`;
     return "Inspect the task and decide whether to resume or discard.";
+}
+function failureDetailRows(task) {
+    const rows = [];
+    if (!task.failure && !task.error)
+        return rows;
+    rows.push(["Issue", task.failure?.message ?? task.error ?? "Task failed."]);
+    if (task.failure?.targetBranch) {
+        rows.push(["Target", task.failure.targetBranch]);
+    }
+    const detailLines = (task.errorDetail ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(0, 8);
+    for (const [index, line] of detailLines.entries()) {
+        rows.push([index === 0 ? "Why" : "Detail", line]);
+    }
+    return rows;
 }
 function PlainText({ text, maxLines, offset, placeholder, }) {
     if (!text) {

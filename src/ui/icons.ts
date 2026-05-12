@@ -7,6 +7,7 @@ export const STATE_ICON: Record<TaskState, string> = {
   permission: "!",
   idle: "◐",
   ready: "✓",
+  merging: "↻",
   failed: "✗",
   merged: "·",
 };
@@ -17,6 +18,7 @@ export const STATE_COLOR: Record<TaskState, string> = {
   permission: UI.danger,
   idle: UI.info,
   ready: UI.success,
+  merging: UI.warning,
   failed: UI.danger,
   merged: UI.subtle,
 };
@@ -27,6 +29,7 @@ export const STATE_LABEL: Record<TaskState, string> = {
   permission: "permission",
   idle: "idle",
   ready: "no pane",
+  merging: "merging",
   failed: "failed",
   merged: "applied",
 };
@@ -38,6 +41,7 @@ export const LIFECYCLE_LABEL: Record<TaskLifecycle, string> = {
   ready: "ready",
   applying: "applying",
   done: "done",
+  failed: "failed",
   archived: "archived",
   cancelled: "cancelled",
 };
@@ -49,6 +53,7 @@ export const LIFECYCLE_COLOR: Record<TaskLifecycle, string> = {
   ready: UI.success,
   applying: UI.warning,
   done: UI.subtle,
+  failed: UI.danger,
   archived: UI.subtle,
   cancelled: UI.danger,
 };

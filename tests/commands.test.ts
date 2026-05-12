@@ -56,6 +56,30 @@ test("commandRows mutes destructive actions for applied tasks", () => {
   assert.equal(rows.find((row) => row.key === "z")?.label, "hide archived tasks");
 });
 
+test("commandRows treats merging tasks as background apply jobs", () => {
+  const rows = commandRows({
+    task: task("merging", {
+      lifecycle: "applying",
+      operation: { phase: "merge", targetBranch: "develop", startedAt: 1 },
+    }),
+    density: "detailed",
+    targetBranch: "develop",
+    showArchived: false,
+    inSession: true,
+  });
+
+  assert.deepEqual(
+    rows
+      .filter((row) => row.key === "enter" || row.key === "m" || row.key === "X")
+      .map((row) => [row.key, row.muted, row.label]),
+    [
+      ["enter", true, "merge running in background"],
+      ["m", true, "merge already running"],
+      ["X", true, "kill unavailable while merging"],
+    ]
+  );
+});
+
 test("helpSections uses the active target branch everywhere target-specific", () => {
   const rows = helpSections("release").flatMap((section) => section.rows);
   assert.ok(rows.some(([key, label]) => key === "f" && label === "files changed vs release"));
@@ -70,5 +94,6 @@ test("isLiveTask matches pane-backed task states", () => {
   assert.equal(isLiveTask(task("permission")), true);
   assert.equal(isLiveTask(task("idle")), true);
   assert.equal(isLiveTask(task("ready")), false);
+  assert.equal(isLiveTask(task("merging")), false);
   assert.equal(isLiveTask(task("merged")), false);
 });

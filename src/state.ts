@@ -4,10 +4,12 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type {
   AgentKind,
+  TaskFailure,
   ReviewStats,
   Task,
   TaskLifecycle,
   TaskListDensity,
+  TaskOperation,
 } from "./model.js";
 
 export interface TaskSnapshot {
@@ -35,6 +37,10 @@ export interface TaskRecord {
    * incorrectly drift to `ready`.
    */
   paneId?: string;
+  /** Background operation currently running for this task. */
+  operation?: TaskOperation;
+  /** Last operation failure details, kept until retry/success/removal. */
+  failure?: TaskFailure;
 }
 
 export interface UiPrefs {
@@ -119,6 +125,8 @@ export async function recordSpawn(
       paneId: paneId ?? state.tasks[slug]?.paneId,
       lifecycle: "active",
       lifecycleAt: now,
+      operation: undefined,
+      failure: undefined,
     };
   });
 }
@@ -139,6 +147,8 @@ export async function recordResume(
       paneId: paneId ?? existing.paneId,
       lifecycle: "active",
       lifecycleAt: now,
+      operation: undefined,
+      failure: undefined,
     };
   });
 }
@@ -158,6 +168,7 @@ export async function recordLifecycle(
         lifecycle: undefined,
         lifecycleAt: undefined,
         snapshot: undefined,
+        operation: undefined,
       };
       return;
     }
@@ -165,6 +176,46 @@ export async function recordLifecycle(
       ...existing,
       lifecycle,
       lifecycleAt: now,
+      snapshot: snapshot ?? existing.snapshot,
+      operation: lifecycle === "done" ? undefined : existing.operation,
+      failure: lifecycle === "done" ? undefined : existing.failure,
+    };
+  });
+}
+
+/** Persist a background operation marker so polling can keep the task visible. */
+export async function recordTaskOperation(
+  slug: string,
+  operation: TaskOperation,
+  snapshot?: TaskSnapshot
+): Promise<void> {
+  await withState((state) => {
+    const existing = state.tasks[slug] ?? { spawnedAt: operation.startedAt };
+    state.tasks[slug] = {
+      ...existing,
+      lifecycle: "applying",
+      lifecycleAt: operation.startedAt,
+      operation,
+      failure: undefined,
+      snapshot: snapshot ?? existing.snapshot,
+    };
+  });
+}
+
+/** Persist a task operation failure so the inspector can explain what happened. */
+export async function recordTaskFailure(
+  slug: string,
+  failure: TaskFailure,
+  snapshot?: TaskSnapshot
+): Promise<void> {
+  await withState((state) => {
+    const existing = state.tasks[slug] ?? { spawnedAt: failure.at };
+    state.tasks[slug] = {
+      ...existing,
+      lifecycle: "failed",
+      lifecycleAt: failure.at,
+      operation: undefined,
+      failure,
       snapshot: snapshot ?? existing.snapshot,
     };
   });

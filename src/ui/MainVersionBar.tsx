@@ -56,6 +56,8 @@ export function MainVersionBar({
     mainVersion.shortSha || "no sha"
   } ${mainVersion.dirty ? "dirty" : "clean"} · active ${counts.active} ready ${
     counts.ready
+  }${counts.applying ? ` applying ${counts.applying}` : ""}${
+    counts.failed ? ` failed ${counts.failed}` : ""
   } done ${counts.done}${target}${filter} · ${path}`;
   const maxSummary = Math.max(12, width - "inklit ".length - 2);
 
@@ -67,12 +69,20 @@ export function MainVersionBar({
   );
 }
 
-function summarize(tasks: Task[]): { active: number; ready: number; done: number } {
-  const counts = { active: 0, ready: 0, done: 0 };
+function summarize(tasks: Task[]): {
+  active: number;
+  ready: number;
+  applying: number;
+  failed: number;
+  done: number;
+} {
+  const counts = { active: 0, ready: 0, applying: 0, failed: 0, done: 0 };
   for (const task of tasks) {
     const lifecycle = lifecycleForTask(task);
     if (lifecycle === "active") counts.active += 1;
     if (lifecycle === "ready") counts.ready += 1;
+    if (lifecycle === "applying") counts.applying += 1;
+    if (lifecycle === "failed") counts.failed += 1;
     if (lifecycle === "done") counts.done += 1;
   }
   return counts;
