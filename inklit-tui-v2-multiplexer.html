@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>inklit — Multiplexer Layout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,500;9..40,700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0c0c;
+    --surface: #141414;
+    --border: #222;
+    --border-bright: #333;
+    --text: #d4d4d4;
+    --text-dim: #666;
+    --text-muted: #444;
+    --amber: #ffb454;
+    --amber-dim: #8a6530;
+    --green: #8ec07c;
+    --red: #ea6962;
+    --blue: #7daea3;
+    --yellow: #d8a657;
+    --pink: #d3869b;
+    --status-bar-bg: #181818;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #050505;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'DM Mono', monospace;
+    color: var(--text);
+  }
+
+  .app {
+    width: 1024px;
+    height: 660px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+  }
+
+  /* Status line (tmux-style) */
+  .status-line {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    height: 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .status-line .session {
+    color: var(--amber);
+    font-weight: 500;
+  }
+
+  .status-line .window {
+    display: flex;
+    gap: 1px;
+  }
+
+  .status-line .window-item {
+    padding: 0 8px;
+    color: var(--text-dim);
+    background: var(--bg);
+    border-radius: 2px;
+    font-size: 11px;
+  }
+
+  .status-line .window-item.active {
+    background: var(--amber);
+    color: #000;
+    font-weight: 500;
+  }
+
+  .status-line .right {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 10px;
+  }
+
+  /* Grid */
+  .grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    min-height: 0;
+  }
+
+  .pane {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .pane-header {
+    display: flex;
+    align-items: center;
+    padding: 3px 10px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    gap: 8px;
+    flex-shrink: 0;
+    height: 22px;
+  }
+
+  .pane-header .pane-number {
+    color: var(--amber-dim);
+    font-size: 10px;
+  }
+
+  .pane-header .pane-title {
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 10px;
+  }
+
+  .pane-header .pane-title span {
+    color: var(--amber);
+  }
+
+  .pane-header .pane-meta {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  .pane-content {
+    flex: 1;
+    padding: 8px 10px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .pane-content::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .pane-content::-webkit-scrollbar-thumb {
+    background: var(--text-muted);
+    border-radius: 2px;
+  }
+
+  /* Task list inside pane */
+  .task-line {
+    display: flex;
+    align-items: center;
+    padding: 3px 0;
+    gap: 6px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .task-line:last-child {
+    border-bottom: none;
+  }
+
+  .task-line .marker {
+    color: var(--text-muted);
+    font-size: 10px;
+    width: 8px;
+    text-align: center;
+  }
+
+  .task-line .marker.active { color: var(--amber); }
+
+  .task-line .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .task-line .dot.running { background: var(--amber); }
+  .task-line .dot.waiting { background: var(--yellow); }
+  .task-line .dot.idle { background: var(--blue); }
+  .task-line .dot.ready { background: var(--green); }
+  .task-line .dot.failed { background: var(--red); box-shadow: 0 0 4px var(--red); }
+  .task-line .dot.done { background: var(--text-muted); }
+
+  .task-line .name {
+    width: 130px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .task-line .name.active-task { color: var(--amber); }
+
+  .task-line .subject {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  .task-line .status-tag {
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .task-line .age {
+    font-size: 10px;
+    color: var(--text-muted);
+    width: 30px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .task-line.selected {
+    background: var(--surface);
+  }
+
+  .task-line.selected .marker { color: var(--amber); }
+
+  /* Detail info inside pane */
+  .detail-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .detail-compact .row {
+    display: flex;
+    font-size: 12px;
+    line-height: 1.8;
+    gap: 4px;
+  }
+
+  .detail-compact .row .k {
+    color: var(--text-muted);
+    width: 70px;
+    flex-shrink: 0;
+  }
+
+  .detail-compact .row .v { color: var(--text); }
+
+  .detail-compact .row .v.amber { color: var(--amber); }
+  .detail-compact .row .v.green { color: var(--green); }
+
+  .tl-mini {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 11px;
+    padding: 4px 0;
+  }
+
+  .tl-mini .s {
+    padding: 1px 5px;
+    border-radius: 2px;
+    background: var(--surface);
+    color: var(--text-muted);
+  }
+
+  .tl-mini .s.done {
+    color: var(--green);
+    background: rgba(142,192,124,0.1);
+  }
+
+  .tl-mini .s.curr {
+    color: var(--amber);
+    background: rgba(255,180,84,0.1);
+  }
+
+  .tl-mini .arr {
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  /* Log pane */
+  .log-line {
+    font-size: 11px;
+    line-height: 1.7;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .log-line .ts {
+    color: var(--text-muted);
+    margin-right: 8px;
+  }
+
+  .log-line .level {
+    padding: 0 4px;
+    border-radius: 2px;
+    font-size: 10px;
+    margin-right: 6px;
+  }
+
+  .log-line .level.info { color: var(--blue); }
+  .log-line .level.warn { color: var(--yellow); }
+  .log-line .level.ok { color: var(--green); }
+  .log-line .level.err { color: var(--red); }
+
+  .log-line .highlight-amber { color: var(--amber); }
+
+  /* Cursor simulation */
+  .cursor-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 4px 0;
+  }
+
+  .cursor-line .prompt {
+    color: var(--green);
+  }
+
+  .cursor-line .cursor {
+    width: 6px;
+    height: 14px;
+    background: var(--amber);
+    animation: blink 1s step-end infinite;
+  }
+
+  @keyframes blink {
+    50% { opacity: 0; }
+  }
+
+  /* Bottom bar */
+  .bottom-bar {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    height: 22px;
+    background: var(--status-bar-bg);
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .bottom-bar .left {
+    display: flex;
+    gap: 8px;
+  }
+
+  .bottom-bar .mode {
+    color: var(--amber);
+    font-weight: 500;
+  }
+
+  .bottom-bar .hint {
+    color: var(--text-dim);
+  }
+
+  .bottom-bar .key {
+    color: var(--text-muted);
+    background: var(--surface);
+    padding: 0 4px;
+    border-radius: 2px;
+  }
+
+  .bottom-bar .right {
+    margin-left: auto;
+    color: var(--text-muted);
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Tmux-style status line -->
+  <div class="status-line">
+    <span class="session">inklit</span>
+    <span class="window">
+      <span class="window-item active">1:agents</span>
+      <span class="window-item">2:detail</span>
+      <span class="window-item">3:log</span>
+      <span class="window-item">4:status</span>
+    </span>
+    <span class="right">"~/project" main:abc1234 3 active</span>
+  </div>
+
+  <!-- 4-pane grid -->
+  <div class="grid">
+
+    <!-- Pane 1: Task list -->
+    <div class="pane">
+      <div class="pane-header">
+        <span class="pane-number">0</span>
+        <span class="pane-title"><span>agents</span> · 7 tasks</span>
+        <span class="pane-meta">j/k scroll</span>
+      </div>
+      <div class="pane-content">
+        <div class="task-line selected">
+          <span class="marker active">▸</span>
+          <span class="dot running"></span>
+          <span class="name active-task">fix-api-validation</span>
+          <span class="subject">Fix API validation for user input</span>
+          <span class="age">5m</span>
+        </div>
+        <div class="task-line">
+          <span class="marker"> </span>
+          <span class="dot running"></span>
+          <span class="name">setup-ci-pipeline</span>
+          <span class="subject">Set up CI pipeline with GitHub Actions</span>
+          <span class="age">12m</span>
+        </div>
+        <div class="task-line">
+          <span class="marker"> </span>
+          <span class="dot waiting"></span>
+          <span class="name">update-readme</span>
+          <span class="subject">Update README with new API docs</span>
+          <span class="age">3m</span>
+        </div>
+        <div class="task-line">
+          <span class="marker"> </span>
+          <span class="dot idle"></span>
+          <span class="name">add-error-states</span>
+          <span class="subject">Add error state handling to forms</span>
+          <span class="age">22m</span>
+        </div>
+        <div class="task-line">
+          <span class="marker"> </span>
+          <span class="dot ready"></span>
+          <span class="name">refactor-auth</span>
+          <span class="subject">Refactor authentication middleware</span>
+          <span class="age">1h</span>
+        </div>
+        <div class="task-line">
+          <span class="marker"> </span>
+          <span class="dot ready"></span>
+          <span class="name">add-tests</span>
+          <span class="subject">Add unit tests for data layer</span>
+          <span class="age">2h</span>
+        </div>
+        <div class="task-line">
+          <span class="marker"> </span>
+          <span class="dot failed"></span>
+          <span class="name">migrate-db</span>
+          <span class="subject">Merge conflict: db/migrations/001_init.sql</span>
+          <span class="age">35m</span>
+        </div>
+        <div class="task-line">
+          <span class="marker"> </span>
+          <span class="dot done"></span>
+          <span class="name">fix-login-bug</span>
+          <span class="subject">Fix login redirect loop</span>
+          <span class="age">4h</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pane 2: Detail -->
+    <div class="pane">
+      <div class="pane-header">
+        <span class="pane-number">1</span>
+        <span class="pane-title"><span>detail</span> · fix-api-validation</span>
+        <span class="pane-meta">def7890</span>
+      </div>
+      <div class="pane-content">
+        <div class="tl-mini">
+          <span class="s done">spawned</span><span class="arr">→</span>
+          <span class="s curr">working</span><span class="arr">→</span>
+          <span class="s">review</span><span class="arr">→</span>
+          <span class="s">apply</span><span class="arr">→</span>
+          <span class="s">done</span>
+        </div>
+        <div class="detail-compact" style="margin-top:8px">
+          <div class="row"><span class="k">Status</span><span class="v amber">active</span><span class="v"> · pane running</span></div>
+          <div class="row"><span class="k">Next</span><span class="v">Review changes when agent finishes</span></div>
+          <div class="row"><span class="k">Readiness</span><span class="v">3 files, 1 commit</span></div>
+          <div class="row"><span class="k">Signals</span><span class="v amber">● changes present</span></div>
+          <div class="row"><span class="k">Controls</span><span class="v">f:files · d:diff · m:apply</span></div>
+          <div class="row"><span class="k">Checkpoint</span><span class="v">def7890</span></div>
+          <div class="row"><span class="k">Worktree</span><span class="v">~/project/worktrees/fix-api-validation</span></div>
+          <div class="row"><span class="k">Thread</span><span class="v green">● live</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pane 3: Log -->
+    <div class="pane">
+      <div class="pane-header">
+        <span class="pane-number">2</span>
+        <span class="pane-title"><span>transcript</span> · live</span>
+        <span class="pane-meta">tail -f</span>
+      </div>
+      <div class="pane-content">
+        <div class="log-line"><span class="ts">14:23:01</span><span class="level ok"> ok </span>Checkpoint created: def7890</div>
+        <div class="log-line"><span class="ts">14:22:45</span><span class="level info">info</span>Processing src/validators/user.ts</div>
+        <div class="log-line"><span class="ts">14:22:30</span><span class="level info">info</span>Processing src/middleware/auth.ts</div>
+        <div class="log-line"><span class="ts">14:22:12</span><span class="level warn">warn</span>Linter: unused variable <span class="highlight-amber">userId</span> in auth.ts:45</div>
+        <div class="log-line"><span class="ts">14:21:50</span><span class="level info">info</span>Agent started: fix-api-validation</div>
+        <div class="log-line"><span class="ts">14:21:49</span><span class="level ok"> ok </span>Worktree created</div>
+        <div class="log-line"><span class="ts">14:21:49</span><span class="level info">info</span>Branch: fix-api-validation from main</div>
+        <div class="cursor-line">
+          <span class="prompt">$</span>
+          <span>tail -f .agent/transcript.log</span>
+          <span class="cursor"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pane 4: Status / Preview -->
+    <div class="pane">
+      <div class="pane-header">
+        <span class="pane-number">3</span>
+        <span class="pane-title"><span>preview</span> · diff</span>
+        <span class="pane-meta">git diff --stat</span>
+      </div>
+      <div class="pane-content">
+        <div class="cursor-line"><span class="prompt">$</span> git diff --stat main...fix-api-validation</div>
+        <div style="margin-top:6px;font-size:12px;line-height:1.8">
+          <div style="color:var(--green)">src/validators/user.ts</div>
+          <div style="padding-left:12px;font-size:11px;color:var(--text-dim)">+12 -4 &nbsp; validateEmail() added, input sanitization</div>
+          <div style="color:var(--green);margin-top:2px">src/middleware/auth.ts</div>
+          <div style="padding-left:12px;font-size:11px;color:var(--text-dim)">+8 -2 &nbsp; token refresh logic</div>
+          <div style="color:var(--green);margin-top:2px">src/utils/errors.ts</div>
+          <div style="padding-left:12px;font-size:11px;color:var(--text-dim)">+5 -1 &nbsp; new error type for validation</div>
+        </div>
+        <div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;font-size:11px;color:var(--text-dim)">
+          <span style="color:var(--green)">25 additions</span> · <span style="color:var(--red)">7 deletions</span> · 3 files
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Bottom bar -->
+  <div class="bottom-bar">
+    <div class="left">
+      <span class="mode">NORMAL</span>
+      <span class="hint"><span class="key">j</span><span class="hint"> ↓ </span><span class="key">k</span><span class="hint"> ↑ </span><span class="key">Tab</span><span class="hint"> pane </span><span class="key">t</span><span class="hint"> task </span><span class="key">f</span><span class="hint"> files </span><span class="key">d</span><span class="hint"> diff </span><span class="key">?</span><span class="hint"> help</span></span>
+    </div>
+    <div class="right">fix-api-validation · 5m · running</div>
+  </div>
+</div>
+
+</body>
+</html>

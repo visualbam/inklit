@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>inklit — Sidebar Layout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d15;
+    --sidebar: #0f111a;
+    --surface: #141622;
+    --border: #1e2032;
+    --border-light: #282a44;
+    --text: #c8ccd6;
+    --text-dim: #5a5f7a;
+    --text-muted: #3d4158;
+    --accent: #f0c98a;
+    --accent-dim: #8a7a55;
+    --blue: #7aa2f7;
+    --cyan: #7dcfff;
+    --green: #9ece6a;
+    --red: #f7768e;
+    --orange: #e0af68;
+    --purple: #bb9af7;
+    --selection: #1d2137;
+    --active-indicator: #f0c98a;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #07080e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text);
+  }
+
+  .app {
+    width: 1024px;
+    height: 640px;
+    background: var(--bg);
+    border-radius: 14px;
+    box-shadow: 0 25px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.04);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Title bar */
+  .titlebar {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .titlebar-dots {
+    display: flex;
+    gap: 7px;
+  }
+
+  .titlebar-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .titlebar-dot.r { background: #ff5f57; }
+  .titlebar-dot.y { background: #ffbd2e; }
+  .titlebar-dot.g { background: #28c840; }
+
+  .titlebar-brand {
+    font-family: 'Instrument Sans', sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-left: 4px;
+  }
+
+  .titlebar-brand span { color: var(--accent); }
+
+  .titlebar-path {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+  }
+
+  /* Body: sidebar + main */
+  .body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 340px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .sidebar-header h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .sidebar-header .count {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--surface);
+    padding: 0 7px;
+    border-radius: 4px;
+  }
+
+  .task-groups {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .task-groups::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .task-groups::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .task-groups::-webkit-scrollbar-thumb {
+    background: var(--border-light);
+    border-radius: 2px;
+  }
+
+  .group-label {
+    display: flex;
+    align-items: center;
+    padding: 8px 14px 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+    gap: 6px;
+  }
+
+  .group-label .gdot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .group-label .gcount {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: auto;
+  }
+
+  .group-label.running .gdot { background: var(--orange); }
+  .group-label.waiting .gdot { background: var(--accent); }
+  .group-label.idle .gdot { background: var(--blue); }
+  .group-label.ready .gdot { background: var(--green); }
+  .group-label.failed .gdot { background: var(--red); }
+  .group-label.done .gdot { background: var(--text-muted); }
+
+  .side-task {
+    display: flex;
+    align-items: center;
+    padding: 6px 14px;
+    cursor: default;
+    border-left: 2px solid transparent;
+    transition: background 0.1s;
+    gap: 8px;
+  }
+
+  .side-task:hover {
+    background: var(--surface);
+  }
+
+  .side-task.active {
+    background: var(--surface);
+    border-left-color: var(--active-indicator);
+  }
+
+  .side-status {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .side-status.running { background: var(--orange); }
+  .side-status.waiting { background: var(--accent); }
+  .side-status.idle { background: var(--blue); }
+  .side-status.ready { background: var(--green); }
+  .side-status.failed { background: var(--red); }
+  .side-status.done { background: var(--text-muted); }
+
+  .side-task-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .side-task-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .side-task-name .highlight {
+    color: var(--accent);
+  }
+
+  .side-task-sub {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 1px;
+  }
+
+  .side-task-sub .tag {
+    background: var(--surface);
+    padding: 0 5px;
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
+  .side-task-age {
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  /* Main panel */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .main-toolbar {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    height: 32px;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .main-toolbar .tab {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 0 2px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    border-bottom: 2px solid transparent;
+    cursor: default;
+  }
+
+  .main-toolbar .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .main-toolbar .tab .keyhint {
+    color: var(--text-muted);
+    margin-right: 4px;
+  }
+
+  .main-content {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .main-content::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .main-content::-webkit-scrollbar-thumb {
+    background: var(--border-light);
+    border-radius: 2px;
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .detail-header h2 {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .detail-header .detail-branch {
+    font-size: 12px;
+    color: var(--accent-dim);
+    background: var(--surface);
+    padding: 1px 8px;
+    border-radius: 4px;
+  }
+
+  .detail-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+
+  .badge.accent { color: var(--accent); border-color: var(--accent-dim); }
+  .badge.green { color: var(--green); border-color: rgba(158,206,106,0.3); }
+  .badge.red { color: var(--red); border-color: rgba(247,118,142,0.3); }
+  .badge.blue { color: var(--blue); border-color: rgba(122,162,247,0.3); }
+
+  .detail-section {
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+
+  .detail-section h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 24px;
+  }
+
+  .detail-field {
+    display: flex;
+    gap: 6px;
+    font-size: 12px;
+    line-height: 1.8;
+  }
+
+  .detail-field .key {
+    color: var(--text-muted);
+    width: 70px;
+    flex-shrink: 0;
+  }
+
+  .detail-field .val {
+    color: var(--text);
+  }
+
+  .timeline-flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    font-size: 12px;
+    padding: 8px 0;
+  }
+
+  .tl-step {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--surface);
+  }
+
+  .tl-step.done {
+    color: var(--green);
+    background: rgba(158,206,106,0.08);
+  }
+
+  .tl-step.current {
+    color: var(--accent);
+    background: rgba(240,201,138,0.1);
+    border: 1px solid rgba(240,201,138,0.2);
+  }
+
+  .tl-arrow {
+    color: var(--text-muted);
+    margin: 0 4px;
+    font-size: 14px;
+  }
+
+  .tl-arrow.done { color: var(--green); }
+
+  /* Footer */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 7px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    background: var(--sidebar);
+  }
+
+  .footer .key {
+    color: var(--accent-dim);
+    background: var(--surface);
+    padding: 0 4px;
+    border-radius: 2px;
+    font-size: 10px;
+  }
+
+  .footer .hint {
+    color: var(--text-dim);
+  }
+
+  .footer .spacer {
+    margin-left: auto;
+  }
+
+  .footer .next-action {
+    color: var(--accent);
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Titlebar -->
+  <div class="titlebar">
+    <div class="titlebar-dots">
+      <span class="titlebar-dot r"></span>
+      <span class="titlebar-dot y"></span>
+      <span class="titlebar-dot g"></span>
+    </div>
+    <div class="titlebar-brand">inklit<span>.</span></div>
+    <div class="titlebar-path">~/project · main abc1234 clean</div>
+  </div>
+
+  <div class="body">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h3>Agents</h3>
+        <span class="count">7</span>
+      </div>
+      <div class="task-groups">
+
+        <div class="group-label running">
+          <span class="gdot"></span> Running <span class="gcount">2</span>
+        </div>
+        <div class="side-task active">
+          <span class="side-status running"></span>
+          <div class="side-task-info">
+            <div class="side-task-name"><span class="highlight">fix-api-validation</span></div>
+            <div class="side-task-sub">Fix API validation for user input <span class="tag">active</span></div>
+          </div>
+          <span class="side-task-age">5m</span>
+        </div>
+        <div class="side-task">
+          <span class="side-status running"></span>
+          <div class="side-task-info">
+            <div class="side-task-name">setup-ci-pipeline</div>
+            <div class="side-task-sub">Set up CI pipeline <span class="tag">active</span></div>
+          </div>
+          <span class="side-task-age">12m</span>
+        </div>
+
+        <div class="group-label waiting">
+          <span class="gdot"></span> Waiting <span class="gcount">1</span>
+        </div>
+        <div class="side-task">
+          <span class="side-status waiting"></span>
+          <div class="side-task-info">
+            <div class="side-task-name">update-readme</div>
+            <div class="side-task-sub">Update README with new API docs <span class="tag">active</span></div>
+          </div>
+          <span class="side-task-age">3m</span>
+        </div>
+
+        <div class="group-label idle">
+          <span class="gdot"></span> Idle <span class="gcount">1</span>
+        </div>
+        <div class="side-task">
+          <span class="side-status idle"></span>
+          <div class="side-task-info">
+            <div class="side-task-name">add-error-states</div>
+            <div class="side-task-sub">Add error state handling <span class="tag">idle 45s</span></div>
+          </div>
+          <span class="side-task-age">22m</span>
+        </div>
+
+        <div class="group-label ready">
+          <span class="gdot"></span> Ready <span class="gcount">2</span>
+        </div>
+        <div class="side-task">
+          <span class="side-status ready"></span>
+          <div class="side-task-info">
+            <div class="side-task-name">refactor-auth</div>
+            <div class="side-task-sub">Refactor authentication middleware <span class="tag">2 files</span></div>
+          </div>
+          <span class="side-task-age">1h</span>
+        </div>
+        <div class="side-task">
+          <span class="side-status ready"></span>
+          <div class="side-task-info">
+            <div class="side-task-name">add-tests</div>
+            <div class="side-task-sub">Add unit tests for data layer <span class="tag">clean</span></div>
+          </div>
+          <span class="side-task-age">2h</span>
+        </div>
+
+        <div class="group-label failed">
+          <span class="gdot"></span> Failed <span class="gcount">1</span>
+        </div>
+        <div class="side-task">
+          <span class="side-status failed"></span>
+          <div class="side-task-info">
+            <div class="side-task-name">migrate-db</div>
+            <div class="side-task-sub">Conflict: db/migrations/001_init.sql <span class="tag">merge failed</span></div>
+          </div>
+          <span class="side-task-age">35m</span>
+        </div>
+
+        <div class="group-label done">
+          <span class="gdot"></span> Done <span class="gcount">1</span>
+        </div>
+        <div class="side-task">
+          <span class="side-status done"></span>
+          <div class="side-task-info">
+            <div class="side-task-name">fix-login-bug</div>
+            <div class="side-task-sub">Fix login redirect loop <span class="tag">applied</span></div>
+          </div>
+          <span class="side-task-age">4h</span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Main -->
+    <div class="main">
+      <div class="main-toolbar">
+        <span class="tab active"><span class="keyhint">[t]</span>task</span>
+        <span class="tab"><span class="keyhint">[f]</span>files</span>
+        <span class="tab"><span class="keyhint">[d]</span>diff</span>
+        <span class="tab"><span class="keyhint">[l]</span>log</span>
+        <span class="tab"><span class="keyhint">[a]</span>agent</span>
+      </div>
+
+      <div class="main-content">
+        <div class="detail-header">
+          <h2>fix-api-validation</h2>
+          <span class="detail-branch">def7890</span>
+        </div>
+
+        <div class="detail-badges">
+          <span class="badge accent">● active</span>
+          <span class="badge">task · running</span>
+          <span class="badge blue">5 files changed</span>
+          <span class="badge">pane: running</span>
+        </div>
+
+        <div class="detail-section">
+          <h4>Flow</h4>
+          <div class="timeline-flow">
+            <span class="tl-step done">spawned</span>
+            <span class="tl-arrow done">→</span>
+            <span class="tl-step current">working</span>
+            <span class="tl-arrow">→</span>
+            <span class="tl-step">review</span>
+            <span class="tl-arrow">→</span>
+            <span class="tl-step">apply</span>
+            <span class="tl-arrow">→</span>
+            <span class="tl-step">done</span>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h4>Details</h4>
+          <div class="detail-grid">
+            <div class="detail-field"><span class="key">Status</span><span class="val">active task, pane running</span></div>
+            <div class="detail-field"><span class="key">Next</span><span class="val">Review changes when ready</span></div>
+            <div class="detail-field"><span class="key">Readiness</span><span class="val">3 files, 1 commit pending</span></div>
+            <div class="detail-field"><span class="key">Signals</span><span class="val">changes present</span></div>
+            <div class="detail-field"><span class="key">Controls</span><span class="val">f:files · d:diff · m:apply</span></div>
+            <div class="detail-field"><span class="key">Worktree</span><span class="val">~/project/worktrees/fix-api-validation</span></div>
+            <div class="detail-field"><span class="key">Checkpoint</span><span class="val">def7890 on fix-api-validation</span></div>
+            <div class="detail-field"><span class="key">Thread</span><span class="val">transcript live · i to send</span></div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <h4>Next task</h4>
+          <div style="font-size:12px;color:var(--text-dim);line-height:1.6">
+            T/1: Harden before apply — 5 changed files: run focused checks and fix regressions.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span class="next-action">Next: inspect idle agent with a</span>
+    <span class="hint">· 7 tasks · fix-api-validation [running]</span>
+    <span class="spacer"></span>
+    <span><span class="key">j</span><span class="hint">/</span><span class="key">k</span><span class="hint"> move · </span><span class="key">?</span><span class="hint"> help · </span><span class="key">:</span><span class="hint"> commands</span></span>
+  </div>
+</div>
+
+</body>
+</html>

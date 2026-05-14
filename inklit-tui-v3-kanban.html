@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>inklit — Kanban Layout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f4f3f0;
+    --surface: #ffffff;
+    --border: #e2e0dc;
+    --border-light: #efedea;
+    --text: #1d1c1a;
+    --text-dim: #7a7874;
+    --text-muted: #b0aeaa;
+    --accent: #b8860b;
+    --accent-light: #f5e6c8;
+    --amber: #d49a2a;
+    --green: #4a7c59;
+    --green-bg: #eaf4ed;
+    --red: #b33a3a;
+    --red-bg: #f8e8e8;
+    --blue: #3a7ca5;
+    --blue-bg: #e8f0f8;
+    --orange: #c0762a;
+    --orange-bg: #f5ede6;
+    --gray-bg: #f0efec;
+    --shadow: rgba(0,0,0,0.05);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #e8e6e2;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'Outfit', system-ui, sans-serif;
+    color: var(--text);
+  }
+
+  .app {
+    width: 1060px;
+    height: 680px;
+    background: var(--bg);
+    border-radius: 16px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.03);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Top bar */
+  .topbar {
+    display: flex;
+    align-items: center;
+    padding: 14px 20px 10px;
+    gap: 16px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .topbar-brand {
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.3px;
+    color: var(--text);
+  }
+
+  .topbar-brand span {
+    color: var(--accent);
+  }
+
+  .topbar-stats {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .topbar-stat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .topbar-stat .num {
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .topbar-stat .sep {
+    color: var(--border);
+  }
+
+  .topbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .topbar-branch {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--surface);
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+  }
+
+  .topbar-btn {
+    font-family: 'Outfit', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: default;
+  }
+
+  .topbar-btn.primary {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+
+  /* Kanban columns */
+  .kanban {
+    flex: 1;
+    display: flex;
+    gap: 12px;
+    padding: 14px 20px;
+    overflow-x: auto;
+    min-height: 0;
+  }
+
+  .kanban::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .kanban::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .kanban::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+  }
+
+  .column {
+    flex: 1;
+    min-width: 150px;
+    max-width: 200px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .col-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+    border-bottom: 2px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .col-header .col-name {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+  }
+
+  .col-header .col-count {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .col-header.running { border-bottom-color: var(--orange); }
+  .col-header.waiting { border-bottom-color: var(--amber); }
+  .col-header.idle { border-bottom-color: var(--blue); }
+  .col-header.ready { border-bottom-color: var(--green); }
+  .col-header.failed { border-bottom-color: var(--red); }
+  .col-header.done { border-bottom-color: var(--text-muted); }
+
+  .col-body {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 4px;
+  }
+
+  .col-body::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .col-body::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+  }
+
+  /* Card */
+  .card {
+    background: var(--surface);
+    border-radius: 8px;
+    border: 1px solid var(--border-light);
+    padding: 10px 12px;
+    cursor: default;
+    transition: box-shadow 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .card:hover {
+    box-shadow: 0 2px 8px var(--shadow);
+    border-color: var(--border);
+  }
+
+  .card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 2px 8px rgba(184,134,11,0.1);
+  }
+
+  .card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+  }
+
+  .card-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+
+  .card-dot.running { background: var(--orange); }
+  .card-dot.waiting { background: var(--amber); }
+  .card-dot.idle { background: var(--blue); }
+  .card-dot.ready { background: var(--green); }
+  .card-dot.failed { background: var(--red); }
+  .card-dot.done { background: var(--text-muted); }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text);
+    flex: 1;
+  }
+
+  .card-title .highlight {
+    color: var(--amber);
+  }
+
+  .card-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.4;
+    margin-top: 3px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-light);
+  }
+
+  .card-tags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .card-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--gray-bg);
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+
+  .card-tag.active { background: var(--orange-bg); color: var(--orange); }
+  .card-tag.ready { background: var(--green-bg); color: var(--green); }
+  .card-tag.fail { background: var(--red-bg); color: var(--red); }
+  .card-tag.idle { background: var(--blue-bg); color: var(--blue); }
+
+  .card-age {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* Detail bar (bottom) */
+  .detail-bar {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .detail-bar .task-name {
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .detail-bar .task-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .detail-bar .task-meta .kv {
+    display: flex;
+    gap: 4px;
+  }
+
+  .detail-bar .task-meta .kv .k {
+    color: var(--text-muted);
+  }
+
+  .detail-bar .detail-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+  }
+
+  .detail-bar .detail-actions .kb {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--gray-bg);
+    color: var(--text-dim);
+    border: 1px solid var(--border-light);
+  }
+
+  /* Status bar */
+  .statusbar {
+    display: flex;
+    align-items: center;
+    padding: 6px 20px;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .statusbar .next {
+    color: var(--amber);
+    font-weight: 500;
+  }
+
+  .statusbar .key {
+    color: var(--text-muted);
+    background: var(--surface);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    border: 1px solid var(--border-light);
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-brand">inklit<span>.</span></div>
+    <div class="topbar-stats">
+      <span class="topbar-stat"><span class="num">7</span> agents</span>
+      <span class="topbar-stat sep">·</span>
+      <span class="topbar-stat"><span class="num">3</span> active</span>
+      <span class="topbar-stat sep">·</span>
+      <span class="topbar-stat"><span class="num">2</span> ready</span>
+      <span class="topbar-stat sep">·</span>
+      <span class="topbar-stat"><span class="num">1</span> failed</span>
+    </div>
+    <div class="topbar-right">
+      <span class="topbar-branch">main · abc1234</span>
+      <span class="topbar-btn primary">+ spawn</span>
+      <span class="topbar-btn">?</span>
+    </div>
+  </div>
+
+  <!-- Kanban board -->
+  <div class="kanban">
+    <!-- Running -->
+    <div class="column">
+      <div class="col-header running">
+        <span class="col-name">Running</span>
+        <span class="col-count">2</span>
+      </div>
+      <div class="col-body">
+        <div class="card selected">
+          <div class="card-top">
+            <span class="card-dot running"></span>
+            <div class="card-title"><span class="highlight">fix-api-validation</span></div>
+          </div>
+          <div class="card-sub">Fix API validation for user input</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag active">active</span>
+              <span class="card-tag">5 files</span>
+            </div>
+            <span class="card-age">5m</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-top">
+            <span class="card-dot running"></span>
+            <div class="card-title">setup-ci-pipeline</div>
+          </div>
+          <div class="card-sub">Set up CI pipeline with GitHub Actions</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag active">active</span>
+            </div>
+            <span class="card-age">12m</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Waiting -->
+    <div class="column">
+      <div class="col-header waiting">
+        <span class="col-name">Waiting</span>
+        <span class="col-count">1</span>
+      </div>
+      <div class="col-body">
+        <div class="card">
+          <div class="card-top">
+            <span class="card-dot waiting"></span>
+            <div class="card-title">update-readme</div>
+          </div>
+          <div class="card-sub">Update README with new API docs</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag active">active</span>
+              <span class="card-tag">pending</span>
+            </div>
+            <span class="card-age">3m</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Idle -->
+    <div class="column">
+      <div class="col-header idle">
+        <span class="col-name">Idle</span>
+        <span class="col-count">1</span>
+      </div>
+      <div class="col-body">
+        <div class="card">
+          <div class="card-top">
+            <span class="card-dot idle"></span>
+            <div class="card-title">add-error-states</div>
+          </div>
+          <div class="card-sub">Add error state handling to forms</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag idle">idle 45s</span>
+              <span class="card-tag">5 files</span>
+            </div>
+            <span class="card-age">22m</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ready -->
+    <div class="column">
+      <div class="col-header ready">
+        <span class="col-name">Ready</span>
+        <span class="col-count">2</span>
+      </div>
+      <div class="col-body">
+        <div class="card">
+          <div class="card-top">
+            <span class="card-dot ready"></span>
+            <div class="card-title">refactor-auth</div>
+          </div>
+          <div class="card-sub">Refactor authentication middleware</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag ready">ready</span>
+              <span class="card-tag">2 files</span>
+              <span class="card-tag">3 commits</span>
+            </div>
+            <span class="card-age">1h</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-top">
+            <span class="card-dot ready"></span>
+            <div class="card-title">add-tests</div>
+          </div>
+          <div class="card-sub">Add unit tests for data layer</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag ready">ready</span>
+              <span class="card-tag">clean</span>
+            </div>
+            <span class="card-age">2h</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Failed -->
+    <div class="column">
+      <div class="col-header failed">
+        <span class="col-name">Failed</span>
+        <span class="col-count">1</span>
+      </div>
+      <div class="col-body">
+        <div class="card">
+          <div class="card-top">
+            <span class="card-dot failed"></span>
+            <div class="card-title">migrate-db</div>
+          </div>
+          <div class="card-sub">Merge conflict: db/migrations/001_init.sql</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag fail">conflict</span>
+            </div>
+            <span class="card-age">35m</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Done -->
+    <div class="column">
+      <div class="col-header done">
+        <span class="col-name">Done</span>
+        <span class="col-count">1</span>
+      </div>
+      <div class="col-body">
+        <div class="card">
+          <div class="card-top">
+            <span class="card-dot done"></span>
+            <div class="card-title">fix-login-bug</div>
+          </div>
+          <div class="card-sub">Fix login redirect loop</div>
+          <div class="card-footer">
+            <div class="card-tags">
+              <span class="card-tag">applied</span>
+            </div>
+            <span class="card-age">4h</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail bar -->
+  <div class="detail-bar">
+    <div class="task-name">fix-api-validation</div>
+    <div class="task-meta">
+      <span class="kv"><span class="k">stage:</span> active</span>
+      <span class="kv"><span class="k">pane:</span> running</span>
+      <span class="kv"><span class="k">branch:</span> def7890</span>
+      <span class="kv"><span class="k">next:</span> review changes</span>
+    </div>
+    <div class="detail-actions">
+      <span class="kb">f files</span>
+      <span class="kb">d diff</span>
+      <span class="kb">m apply</span>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="statusbar">
+    <span class="next">Next: inspect idle agent with <span class="key">a</span></span>
+    <span>· <span class="key">j</span>/<span class="key">k</span> navigate · <span class="key">Tab</span> next pane · <span class="key">/</span> filter · <span class="key">?</span> help</span>
+    <span style="margin-left:auto">add-error-states · idle 45s</span>
+  </div>
+</div>
+
+</body>
+</html>
