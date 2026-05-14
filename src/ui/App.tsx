@@ -1375,6 +1375,7 @@ export function App({ mainBranch = "main" }: AppProps) {
         if (key.escape) dispatch({ type: "mode/list" });
         if (input === "c") void doSpawn(state.pendingDescription, "claude");
         if (input === "x") void doSpawn(state.pendingDescription, "codex");
+        if (input === "o") void doSpawn(state.pendingDescription, "opencode");
         return;
       }
       if (state.mode === "spawning") return;
@@ -1435,6 +1436,9 @@ export function App({ mainBranch = "main" }: AppProps) {
         }
         if (input === "x" && state.pendingResumeSlug) {
           void doResume(state.pendingResumeSlug, "codex");
+        }
+        if (input === "o" && state.pendingResumeSlug) {
+          void doResume(state.pendingResumeSlug, "opencode");
         }
         return;
       }

@@ -67,6 +67,13 @@ export function AgentPicker({ label, intent = "spawn" }: AgentPickerProps) {
           {"  "}codex{" "}
           {intent === "resume" ? <Text dimColor>(resume --last)</Text> : null}
         </Text>
+        <Text>
+          <Text color={UI.accent} bold>
+            o
+          </Text>
+          {"  "}opencode{" "}
+          {intent === "resume" ? <Text dimColor>(--continue)</Text> : null}
+        </Text>
         <Text dimColor>esc  cancel</Text>
       </Box>
     </Box>

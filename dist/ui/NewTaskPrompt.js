@@ -30,6 +30,12 @@ export function AgentPicker({ label, intent = "spawn" }) {
                 "codex",
                 " ",
                 intent === "resume" ? React.createElement(Text, { dimColor: true }, "(resume --last)") : null),
+            React.createElement(Text, null,
+                React.createElement(Text, { color: UI.accent, bold: true }, "o"),
+                "  ",
+                "opencode",
+                " ",
+                intent === "resume" ? React.createElement(Text, { dimColor: true }, "(--continue)") : null),
             React.createElement(Text, { dimColor: true }, "esc  cancel"))));
 }
 //# sourceMappingURL=NewTaskPrompt.js.map

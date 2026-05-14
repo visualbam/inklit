@@ -116,6 +116,8 @@ export function resumeArgsFor(agent: AgentKind): string[] {
       return [...approvalArgsFor(agent), "--continue"];
     case "codex":
       return [...approvalArgsFor(agent), "resume", "--last"];
+    case "opencode":
+      return [...approvalArgsFor(agent), "--continue"];
   }
 }
 
@@ -142,6 +144,8 @@ function approvalArgsFor(agent: AgentKind): string[] {
       return ["--permission-mode", "bypassPermissions"];
     case "codex":
       return ["--ask-for-approval", "never"];
+    case "opencode":
+      return ["run", "--dangerously-skip-permissions"];
   }
 }
 
