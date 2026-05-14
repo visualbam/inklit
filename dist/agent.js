@@ -1,6 +1,8 @@
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 import { spawnPane } from "./zellij.js";
 import { slugify } from "./wt.js";
-import { recordSpawn, recordResume } from "./state.js";
+import { recordSpawn, recordResume, signalPath } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
 /**
  * Spawn a new agent task in its own worktree + zellij pane.
@@ -30,6 +32,10 @@ export async function spawnAgent(opts) {
     // hundreds of ms because zellij + wt + agent boot).
     await recordSpawn(slug, opts.agent, paneId).catch(() => { });
     void refreshTaskPreview(slug, opts.cwd).catch(() => { });
+    if (opts.agent === "claude") {
+        const mainPath = opts.cwd ?? process.cwd();
+        void scheduleStopHook(slug, mainPath + "." + slug);
+    }
     return { slug, paneId };
 }
 /**
@@ -52,6 +58,10 @@ export async function resumeAgent(opts) {
     });
     await recordResume(opts.slug, opts.agent, paneId).catch(() => { });
     void refreshTaskPreview(opts.slug, opts.cwd).catch(() => { });
+    if (opts.agent === "claude") {
+        const mainPath = opts.cwd ?? process.cwd();
+        void scheduleStopHook(opts.slug, mainPath + "." + opts.slug);
+    }
     return { slug: opts.slug, paneId };
 }
 export function launchArgsFor(agent, description) {
@@ -74,5 +84,53 @@ function approvalArgsFor(agent) {
         case "codex":
             return ["--ask-for-approval", "never"];
     }
+}
+/**
+ * Wait for the worktree directory to appear (wt switch -c creates it
+ * asynchronously in the pane), then write a Stop hook into the worktree's
+ * .claude/settings.local.json so Claude signals inklit when it finishes.
+ */
+async function scheduleStopHook(slug, worktreePath) {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        try {
+            await fs.access(worktreePath);
+            break;
+        }
+        catch {
+            await new Promise((r) => setTimeout(r, 150));
+        }
+    }
+    try {
+        await fs.access(worktreePath);
+    }
+    catch {
+        return; // worktree never appeared, skip
+    }
+    await injectStopHook(slug, worktreePath);
+}
+async function injectStopHook(slug, worktreePath) {
+    const settingsPath = join(worktreePath, ".claude", "settings.local.json");
+    const command = `touch ${signalPath(slug)}`;
+    let existing = {};
+    try {
+        const raw = await fs.readFile(settingsPath, "utf-8");
+        existing = JSON.parse(raw);
+    }
+    catch {
+        // No existing file or invalid JSON — start fresh.
+    }
+    const hooks = (existing.hooks ?? {});
+    const stopHooks = [...(hooks.Stop ?? [])];
+    // Avoid duplicating the inklit hook on resume.
+    const hasInklit = stopHooks.some((e) => typeof e === "object" &&
+        e !== null &&
+        Array.isArray(e.hooks) &&
+        (e.hooks ?? []).some((h) => h.command?.includes("inklit")));
+    if (!hasInklit) {
+        stopHooks.push({ hooks: [{ type: "command", command }] });
+    }
+    await fs.mkdir(join(worktreePath, ".claude"), { recursive: true });
+    await fs.writeFile(settingsPath, JSON.stringify({ ...existing, hooks: { ...hooks, Stop: stopHooks } }, null, 2), "utf-8");
 }
 //# sourceMappingURL=agent.js.map

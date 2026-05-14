@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useReducer, useRef } from "react";
+import { watch, existsSync } from "node:fs";
+import { promises as fsPromises } from "node:fs";
+import { join } from "node:path";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { createHash } from "node:crypto";
 import { TaskList, taskListLineCount, taskListMinimumHeight, } from "./List.js";
@@ -17,7 +20,7 @@ import { suggestedFollowUps } from "./followUps.js";
 import { listProject, gitDiff, gitFiles, gitLog, gitReviewStats, detectPermissionRequest, detectWaiting, mergeToMain, syncFromMain, removeWorktree, } from "../wt.js";
 import { inSession, dumpScreen, focusPaneByName, focusPaneId, focusOwnPane, closePaneByName, closePaneById, sendKeysToPaneId, sendKeysToSlug, panesSnapshot, } from "../zellij.js";
 import { spawnAgent, resumeAgent } from "../agent.js";
-import { getAgent, loadAll, recordPane, clearPane, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, } from "../state.js";
+import { getAgent, loadAll, recordPane, clearPane, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, clearStaleApplyOperations, signalDir, } from "../state.js";
 import { clearTaskPreview } from "../preview.js";
 import { notify } from "../notify.js";
 import { initialState, lifecycleForTask } from "../model.js";
@@ -429,7 +432,7 @@ function reducer(s, a) {
 const PROJECT_POLL_MS = 2500;
 const SCREEN_TICK_MS = 750;
 const SELECTED_SCREEN_POLL_MS = 1000;
-const BACKGROUND_SCREEN_POLL_MS = 6000;
+const BACKGROUND_SCREEN_POLL_MS = 2000;
 const DUMP_SCREEN_TIMEOUT_MS = 700;
 const AGENT_TAIL_LINES = 200;
 const REVIEW_STATS_TICK_MS = 2500;
@@ -584,6 +587,8 @@ export function App({ mainBranch = "main" }) {
     const screenHashRef = useRef(new Map());
     /** Slugs already notified as idle this episode; cleared on waiting/ready/failed. */
     const notifiedIdleRef = useRef(new Set());
+    /** Slugs that received a Stop-hook signal and need an immediate screen dump. */
+    const pendingSignalsRef = useRef(new Set());
     /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
     const closingAllRef = useRef(false);
     // Only one apply job can touch the target checkout at a time.
@@ -599,6 +604,9 @@ export function App({ mainBranch = "main" }) {
             if (slug)
                 void recordLifecycle(slug, null).catch(() => { });
         };
+    }, []);
+    useEffect(() => {
+        void clearStaleApplyOperations().catch(() => { });
     }, []);
     useEffect(() => {
         let cancelled = false;
@@ -617,6 +625,32 @@ export function App({ mainBranch = "main" }) {
         latestTasksRef.current = state.tasks;
         latestSelectedSlugRef.current = state.selectedSlug;
     }, [state.tasks, state.selectedSlug]);
+    // Watch the inklit signals directory for Stop-hook notifications from
+    // Claude Code. When a signal file appears, mark the slug as pending so the
+    // screen sampler dumps its pane immediately rather than waiting for the next
+    // background poll interval.
+    useEffect(() => {
+        const dir = signalDir();
+        let watcher = null;
+        void fsPromises
+            .mkdir(dir, { recursive: true })
+            .then(() => {
+            watcher = watch(dir, (_event, filename) => {
+                if (!filename)
+                    return;
+                const slug = String(filename);
+                const filePath = join(dir, slug);
+                if (!existsSync(filePath))
+                    return;
+                pendingSignalsRef.current.add(slug);
+                void fsPromises.unlink(filePath).catch(() => { });
+            });
+        })
+            .catch(() => { });
+        return () => {
+            watcher?.close();
+        };
+    }, []);
     // Poll wt + zellij pane metadata only. Pane screen dumps are throttled in a
     // separate sampler below so a few active agents cannot stall dashboard input.
     useEffect(() => {
@@ -870,6 +904,8 @@ export function App({ mainBranch = "main" }) {
         let cancelled = false;
         let timer = null;
         const due = (task, intervalMs, now) => {
+            if (pendingSignalsRef.current.has(task.slug))
+                return true;
             const cached = screenCacheRef.current.get(task.slug);
             if (!cached || cached.paneId !== task.paneId)
                 return true;
@@ -926,6 +962,7 @@ export function App({ mainBranch = "main" }) {
                 if (task.slug === latestSelectedSlugRef.current) {
                     updateTail(task.slug, screen, prev?.screen);
                 }
+                pendingSignalsRef.current.delete(task.slug);
             }
             if (!cancelled)
                 timer = setTimeout(tick, SCREEN_TICK_MS);
@@ -1203,10 +1240,17 @@ export function App({ mainBranch = "main" }) {
         }
         if (key.escape) {
             const selected = state.tasks.find((t) => t.slug === state.selectedSlug);
-            if (selected?.state === "merging" &&
-                applySlugRef.current === selected.slug) {
-                applyAbortRef.current?.abort();
-                dispatch({ type: "flash", message: `Cancelling merge for ${selected.slug}…` });
+            if (selected?.state === "merging") {
+                if (applySlugRef.current === selected.slug) {
+                    applyAbortRef.current?.abort();
+                    dispatch({ type: "flash", message: `Cancelling merge for ${selected.slug}…` });
+                }
+                else {
+                    // No active merge running — clear the stale merging state.
+                    void recordLifecycle(selected.slug, null).catch(() => { });
+                    dispatch({ type: "task/operationCleared", slug: selected.slug });
+                    dispatch({ type: "flash", message: `Cleared stuck merge state for ${selected.slug}.` });
+                }
                 return;
             }
         }

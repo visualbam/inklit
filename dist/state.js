@@ -7,6 +7,13 @@ function statePath() {
     const base = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
     return join(base, "inklit", "tasks.json");
 }
+export function signalDir() {
+    const base = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+    return join(base, "inklit", "signals");
+}
+export function signalPath(slug) {
+    return join(signalDir(), slug);
+}
 async function readFile() {
     try {
         const raw = await fs.readFile(statePath(), "utf-8");
@@ -140,6 +147,33 @@ export async function recordTaskFailure(slug, failure, snapshot) {
             failure,
             snapshot: snapshot ?? existing.snapshot,
         };
+    });
+}
+/**
+ * On startup, convert any tasks that were mid-merge when inklit last exited
+ * into a "failed" state. Without this, they show as permanently "merging"
+ * with no UI escape (the Esc cancel requires an active abort controller).
+ */
+export async function clearStaleApplyOperations() {
+    const now = Date.now();
+    await withState((state) => {
+        for (const [slug, record] of Object.entries(state.tasks)) {
+            if (record.operation?.phase === "merge") {
+                const failure = {
+                    phase: "merge",
+                    message: "Merge was interrupted (inklit exited during merge)",
+                    targetBranch: record.operation.targetBranch,
+                    at: now,
+                };
+                state.tasks[slug] = {
+                    ...record,
+                    lifecycle: "failed",
+                    lifecycleAt: now,
+                    operation: undefined,
+                    failure,
+                };
+            }
+        }
     });
 }
 export function snapshotTask(task) {
