@@ -8,7 +8,19 @@ const DEFAULT_MAIN_BRANCH = process.env.INKLIT_MAIN_BRANCH || "main";
 export interface GlobalArgs {
   command: "tui" | "spawn" | "help" | "version";
   mainBranch: string;
+  /** True when --main was explicitly provided (or INKLIT_MAIN_BRANCH is set). */
+  explicitMain: boolean;
   commandArgs: string[];
+}
+
+export async function detectCurrentBranch(cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execa("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd });
+    const branch = stdout.trim();
+    return branch && branch !== "HEAD" ? branch : "main";
+  } catch {
+    return "main";
+  }
 }
 
 interface SpawnInput {
@@ -36,6 +48,7 @@ interface SpawnOptions {
 
 export function parseGlobalArgs(args: string[]): GlobalArgs {
   let mainBranch = DEFAULT_MAIN_BRANCH;
+  let explicitMain = !!process.env.INKLIT_MAIN_BRANCH;
   const rest: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -44,24 +57,27 @@ export function parseGlobalArgs(args: string[]): GlobalArgs {
       return {
         command: "spawn",
         mainBranch,
+        explicitMain,
         commandArgs: args.slice(i + 1),
       };
     }
     if (arg === "-h" || arg === "--help") {
-      return { command: "help", mainBranch, commandArgs: [] };
+      return { command: "help", mainBranch, explicitMain, commandArgs: [] };
     }
     if (arg === "-v" || arg === "--version") {
-      return { command: "version", mainBranch, commandArgs: [] };
+      return { command: "version", mainBranch, explicitMain, commandArgs: [] };
     }
     if (arg === "--main") {
       const value = args[++i];
       if (!value) throw new Error("--main requires a branch name");
       mainBranch = value;
+      explicitMain = true;
       continue;
     }
     if (arg.startsWith("--main=")) {
       mainBranch = arg.slice("--main=".length);
       if (!mainBranch) throw new Error("--main requires a branch name");
+      explicitMain = true;
       continue;
     }
     rest.push(arg);
@@ -71,7 +87,7 @@ export function parseGlobalArgs(args: string[]): GlobalArgs {
     throw new Error(`Unknown command or option: ${rest[0]}`);
   }
 
-  return { command: "tui", mainBranch, commandArgs: [] };
+  return { command: "tui", mainBranch, explicitMain, commandArgs: [] };
 }
 
 export async function runSpawnCommand(

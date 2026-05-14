@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { App } from "./ui/App.js";
 import { renameOwnPane, renameOwnTab } from "./zellij.js";
-import { parseGlobalArgs, rootHelp, runSpawnCommand } from "./cli.js";
+import { detectCurrentBranch, parseGlobalArgs, rootHelp, runSpawnCommand } from "./cli.js";
 function readPackageVersion() {
     try {
         const here = dirname(fileURLToPath(import.meta.url));
@@ -27,6 +27,9 @@ catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
 }
+if (!parsed.explicitMain) {
+    parsed.mainBranch = await detectCurrentBranch(process.cwd());
+}
 if (parsed.command === "version") {
     // eslint-disable-next-line no-console
     console.log(`inklit ${readPackageVersion()}`);
@@ -39,8 +42,7 @@ if (parsed.command === "help") {
 }
 if (parsed.command === "spawn") {
     try {
-        const defaultBase = parsed.mainBranch === "main" ? undefined : parsed.mainBranch;
-        const code = await runSpawnCommand(parsed.commandArgs, { defaultBase });
+        const code = await runSpawnCommand(parsed.commandArgs, { defaultBase: parsed.mainBranch });
         process.exit(code);
     }
     catch (err) {

@@ -2,8 +2,19 @@ import { readFile } from "node:fs/promises";
 import { execa } from "execa";
 import { spawnAgent } from "./agent.js";
 const DEFAULT_MAIN_BRANCH = process.env.INKLIT_MAIN_BRANCH || "main";
+export async function detectCurrentBranch(cwd) {
+    try {
+        const { stdout } = await execa("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd });
+        const branch = stdout.trim();
+        return branch && branch !== "HEAD" ? branch : "main";
+    }
+    catch {
+        return "main";
+    }
+}
 export function parseGlobalArgs(args) {
     let mainBranch = DEFAULT_MAIN_BRANCH;
+    let explicitMain = !!process.env.INKLIT_MAIN_BRANCH;
     const rest = [];
     for (let i = 0; i < args.length; i++) {
         const arg = args[i] ?? "";
@@ -11,26 +22,29 @@ export function parseGlobalArgs(args) {
             return {
                 command: "spawn",
                 mainBranch,
+                explicitMain,
                 commandArgs: args.slice(i + 1),
             };
         }
         if (arg === "-h" || arg === "--help") {
-            return { command: "help", mainBranch, commandArgs: [] };
+            return { command: "help", mainBranch, explicitMain, commandArgs: [] };
         }
         if (arg === "-v" || arg === "--version") {
-            return { command: "version", mainBranch, commandArgs: [] };
+            return { command: "version", mainBranch, explicitMain, commandArgs: [] };
         }
         if (arg === "--main") {
             const value = args[++i];
             if (!value)
                 throw new Error("--main requires a branch name");
             mainBranch = value;
+            explicitMain = true;
             continue;
         }
         if (arg.startsWith("--main=")) {
             mainBranch = arg.slice("--main=".length);
             if (!mainBranch)
                 throw new Error("--main requires a branch name");
+            explicitMain = true;
             continue;
         }
         rest.push(arg);
@@ -38,7 +52,7 @@ export function parseGlobalArgs(args) {
     if (rest.length > 0) {
         throw new Error(`Unknown command or option: ${rest[0]}`);
     }
-    return { command: "tui", mainBranch, commandArgs: [] };
+    return { command: "tui", mainBranch, explicitMain, commandArgs: [] };
 }
 export async function runSpawnCommand(args, opts = {}) {
     const parsed = await parseSpawnArgs(args, opts);
