@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { spawnPane } from "./zellij.js";
 import { slugify } from "./wt.js";
-import { recordSpawn, recordResume, signalPath } from "./state.js";
+import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
 import type { AgentKind } from "./model.js";
 
@@ -32,15 +32,19 @@ export async function spawnAgent(opts: {
   anchorPaneId?: string | null;
 }): Promise<SpawnResult> {
   const slug = opts.branch ?? slugify(opts.description);
-  const switchArgs = ["switch", "-c"];
-  if (opts.base) switchArgs.push("--base", opts.base);
-  switchArgs.push(
-    slug,
-    "-x",
-    opts.agent,
-    "--",
-    ...launchArgsFor(opts.agent, opts.description)
-  );
+
+  let switchArgs: string[];
+  if (opts.agent === "claude") {
+    switchArgs = ["switch", "-c"];
+    if (opts.base) switchArgs.push("--base", opts.base);
+    switchArgs.push(slug, "-x", "claude", "--", ...launchArgsFor("claude", opts.description));
+  } else {
+    const wrapPath = await ensureWrapper();
+    // Wrapper's $@ must be a complete command: agent binary + its args.
+    const agentArgs = [opts.agent, ...launchArgsFor(opts.agent, opts.description)];
+    switchArgs = wrappedAgentSwitchArgs(slug, true, opts.base, agentArgs, wrapPath);
+  }
+
   const paneId = await spawnPane({
     name: slug,
     command: "wt",
@@ -77,11 +81,19 @@ export async function resumeAgent(opts: {
   /** Optional pane id of an existing agent to stack onto. */
   anchorPaneId?: string | null;
 }): Promise<SpawnResult> {
-  const resumeArgs = resumeArgsFor(opts.agent);
+  let switchArgs: string[];
+  if (opts.agent === "claude") {
+    switchArgs = ["switch", opts.slug, "-x", "claude", "--", ...resumeArgsFor("claude")];
+  } else {
+    const wrapPath = await ensureWrapper();
+    const agentArgs = [opts.agent, ...resumeArgsFor(opts.agent)];
+    switchArgs = wrappedAgentSwitchArgs(opts.slug, false, undefined, agentArgs, wrapPath);
+  }
+
   const paneId = await spawnPane({
     name: opts.slug,
     command: "wt",
-    args: ["switch", opts.slug, "-x", opts.agent, "--", ...resumeArgs],
+    args: switchArgs,
     cwd: opts.cwd,
     anchorPaneId: opts.anchorPaneId,
   });
@@ -105,6 +117,21 @@ export function resumeArgsFor(agent: AgentKind): string[] {
     case "codex":
       return [...approvalArgsFor(agent), "resume", "--last"];
   }
+}
+
+function wrappedAgentSwitchArgs(
+  slug: string,
+  create: boolean,
+  base: string | undefined,
+  agentArgs: string[],
+  wrapPath: string
+): string[] {
+  const args = ["switch"];
+  if (create) args.push("-c");
+  if (base) args.push("--base", base);
+  // signalPath(slug) is $1 to the wrapper; agentArgs (agent binary + flags) follow as $@
+  args.push(slug, "-x", wrapPath, "--", signalPath(slug), ...agentArgs);
+  return args;
 }
 
 function approvalArgsFor(agent: AgentKind): string[] {

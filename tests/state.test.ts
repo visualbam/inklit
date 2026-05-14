@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { promises as fs } from "node:fs";
+import { promises as fs, constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,8 @@ import {
   recordPreview,
   recordTaskFailure,
   recordTaskOperation,
+  wrapperPath,
+  ensureWrapper,
   type TaskSnapshot,
 } from "../src/state.js";
 
@@ -124,5 +126,67 @@ test("state stores UI preferences without a task record", async () => {
     assert.deepEqual(await loadUiPrefs(), { listDensity: undefined });
     await recordListDensity("compact");
     assert.deepEqual(await loadUiPrefs(), { listDensity: "compact" });
+  });
+});
+
+async function withTempData(
+  run: (dir: string) => Promise<void>
+): Promise<void> {
+  const previous = process.env.XDG_DATA_HOME;
+  const dir = await fs.mkdtemp(join(tmpdir(), "inklit-data-"));
+  process.env.XDG_DATA_HOME = dir;
+  try {
+    await run(dir);
+  } finally {
+    if (previous === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previous;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+test("wrapperPath() respects XDG_DATA_HOME", async () => {
+  await withTempData(async (dir) => {
+    assert.equal(
+      wrapperPath(),
+      join(dir, "inklit", "bin", "inklit-agent-wrap")
+    );
+  });
+});
+
+test("ensureWrapper() creates executable script with expected content", async () => {
+  await withTempData(async () => {
+    const path = await ensureWrapper();
+    const content = await fs.readFile(path, "utf-8");
+    assert.ok(content.startsWith("#!/bin/bash"), "must be a bash script");
+    assert.ok(content.includes('"$@"'), "must pass through args");
+    assert.ok(content.includes("touch"), "must touch signal file");
+    assert.ok(content.includes('exec "${SHELL:-bash}"'), "must exec interactive shell");
+    assert.ok(!content.includes(" -l"), "must not start a login shell");
+    const stat = await fs.stat(path);
+    assert.ok(stat.mode & constants.S_IXUSR, "wrapper must be user-executable");
+  });
+});
+
+test("ensureWrapper() is idempotent — no rewrite when content matches", async () => {
+  await withTempData(async () => {
+    const path1 = await ensureWrapper();
+    const stat1 = await fs.stat(path1);
+    const path2 = await ensureWrapper();
+    const stat2 = await fs.stat(path2);
+    assert.equal(path1, path2);
+    assert.equal(stat1.mtimeMs, stat2.mtimeMs, "mtime must not change on second call");
+  });
+});
+
+test("ensureWrapper() rewrites when content differs (version update)", async () => {
+  await withTempData(async () => {
+    const path = await ensureWrapper();
+    await fs.writeFile(path, "#!/bin/bash\nold content\n", "utf-8");
+    const stat1 = await fs.stat(path);
+    await ensureWrapper();
+    const stat2 = await fs.stat(path);
+    assert.ok(stat2.mtimeMs > stat1.mtimeMs, "mtime must advance after rewrite");
+    const content = await fs.readFile(path, "utf-8");
+    assert.ok(content.includes('"$@"'), "content must be updated to current version");
   });
 });

@@ -73,6 +73,37 @@ export function signalPath(slug: string): string {
   return join(signalDir(), slug);
 }
 
+export function wrapperPath(): string {
+  const base =
+    process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+  return join(base, "inklit", "bin", "inklit-agent-wrap");
+}
+
+export async function ensureWrapper(): Promise<string> {
+  const path = wrapperPath();
+  const script = [
+    "#!/bin/bash",
+    "# inklit agent wrapper — do not edit manually",
+    'INKLIT_SIGNAL="$1"; shift',
+    '"$@"',
+    '[ -n "$INKLIT_SIGNAL" ] && touch "$INKLIT_SIGNAL"',
+    'exec "${SHELL:-bash}"',
+    "",
+  ].join("\n");
+
+  try {
+    const existing = await fs.readFile(path, "utf-8");
+    if (existing === script) return path;
+  } catch {
+    /* not found or unreadable — write it */
+  }
+
+  await fs.mkdir(join(path, ".."), { recursive: true });
+  await fs.writeFile(path, script, { encoding: "utf-8", mode: 0o755 });
+  await fs.chmod(path, 0o755);
+  return path;
+}
+
 async function readFile(): Promise<StateFile> {
   try {
     const raw = await fs.readFile(statePath(), "utf-8");

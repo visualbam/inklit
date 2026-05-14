@@ -341,6 +341,7 @@ export async function spawnPane(opts) {
             ...opts.args,
         ], {
             cwd: opts.cwd,
+            env: opts.env ? { ...process.env, ...opts.env } : undefined,
             reject: true,
             stripFinalNewline: true,
         });

@@ -343,6 +343,13 @@ export async function spawnPane(opts: {
   command: string;
   args: string[];
   cwd?: string;
+  /**
+   * Extra environment variables merged into the zellij client subprocess.
+   * Note: these reach the `zellij action new-pane` client process, not the new
+   * pane itself (zellij has no per-pane env injection in the action API).
+   * Reserved for future use when zellij adds --env support to new-pane.
+   */
+  env?: Record<string, string>;
   /** Existing agent pane id (terminal_N) to anchor the stack on. */
   anchorPaneId?: string | null;
 }): Promise<string | null> {
@@ -377,6 +384,7 @@ export async function spawnPane(opts: {
       ],
       {
         cwd: opts.cwd,
+        env: opts.env ? { ...process.env, ...opts.env } : undefined,
         reject: true,
         stripFinalNewline: true,
       }

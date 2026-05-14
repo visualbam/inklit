@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { spawnPane } from "./zellij.js";
 import { slugify } from "./wt.js";
-import { recordSpawn, recordResume, signalPath } from "./state.js";
+import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
 /**
  * Spawn a new agent task in its own worktree + zellij pane.
@@ -15,10 +15,19 @@ import { refreshTaskPreview } from "./preview.js";
  */
 export async function spawnAgent(opts) {
     const slug = opts.branch ?? slugify(opts.description);
-    const switchArgs = ["switch", "-c"];
-    if (opts.base)
-        switchArgs.push("--base", opts.base);
-    switchArgs.push(slug, "-x", opts.agent, "--", ...launchArgsFor(opts.agent, opts.description));
+    let switchArgs;
+    if (opts.agent === "claude") {
+        switchArgs = ["switch", "-c"];
+        if (opts.base)
+            switchArgs.push("--base", opts.base);
+        switchArgs.push(slug, "-x", "claude", "--", ...launchArgsFor("claude", opts.description));
+    }
+    else {
+        const wrapPath = await ensureWrapper();
+        // Wrapper's $@ must be a complete command: agent binary + its args.
+        const agentArgs = [opts.agent, ...launchArgsFor(opts.agent, opts.description)];
+        switchArgs = wrappedAgentSwitchArgs(slug, true, opts.base, agentArgs, wrapPath);
+    }
     const paneId = await spawnPane({
         name: slug,
         command: "wt",
@@ -48,11 +57,19 @@ export async function spawnAgent(opts) {
  *   codex --ask-for-approval never resume --last
  */
 export async function resumeAgent(opts) {
-    const resumeArgs = resumeArgsFor(opts.agent);
+    let switchArgs;
+    if (opts.agent === "claude") {
+        switchArgs = ["switch", opts.slug, "-x", "claude", "--", ...resumeArgsFor("claude")];
+    }
+    else {
+        const wrapPath = await ensureWrapper();
+        const agentArgs = [opts.agent, ...resumeArgsFor(opts.agent)];
+        switchArgs = wrappedAgentSwitchArgs(opts.slug, false, undefined, agentArgs, wrapPath);
+    }
     const paneId = await spawnPane({
         name: opts.slug,
         command: "wt",
-        args: ["switch", opts.slug, "-x", opts.agent, "--", ...resumeArgs],
+        args: switchArgs,
         cwd: opts.cwd,
         anchorPaneId: opts.anchorPaneId,
     });
@@ -74,6 +91,16 @@ export function resumeArgsFor(agent) {
         case "codex":
             return [...approvalArgsFor(agent), "resume", "--last"];
     }
+}
+function wrappedAgentSwitchArgs(slug, create, base, agentArgs, wrapPath) {
+    const args = ["switch"];
+    if (create)
+        args.push("-c");
+    if (base)
+        args.push("--base", base);
+    // signalPath(slug) is $1 to the wrapper; agentArgs (agent binary + flags) follow as $@
+    args.push(slug, "-x", wrapPath, "--", signalPath(slug), ...agentArgs);
+    return args;
 }
 function approvalArgsFor(agent) {
     // Inklit-spawned agents run unattended in panes; avoid permission dialogs
