@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>inklit — project files</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      min-height: 100vh;
+      padding: 32px 24px;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 32px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #21262d;
+    }
+
+    header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #f0f6fc;
+      letter-spacing: -0.3px;
+    }
+
+    header .version {
+      font-size: 11px;
+      color: #6e7681;
+      background: #21262d;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+
+    header .desc {
+      font-size: 12px;
+      color: #8b949e;
+      margin-left: auto;
+    }
+
+    .tree {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      max-width: 760px;
+    }
+
+    .node {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      cursor: default;
+      transition: background 0.1s;
+      user-select: none;
+    }
+
+    .row:hover {
+      background: #161b22;
+    }
+
+    .row.dir {
+      cursor: pointer;
+    }
+
+    .row.dir:hover {
+      background: #1f2937;
+    }
+
+    .indent {
+      display: flex;
+      align-items: stretch;
+      flex-shrink: 0;
+    }
+
+    .indent-segment {
+      width: 20px;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .indent-segment::before {
+      content: '';
+      position: absolute;
+      left: 9px;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: #21262d;
+    }
+
+    .caret {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      color: #6e7681;
+      transition: transform 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .caret svg {
+      width: 10px;
+      height: 10px;
+    }
+
+    .caret.open {
+      transform: rotate(90deg);
+    }
+
+    .caret-placeholder {
+      width: 14px;
+      flex-shrink: 0;
+    }
+
+    .icon {
+      font-size: 14px;
+      width: 18px;
+      flex-shrink: 0;
+      text-align: center;
+      line-height: 1;
+    }
+
+    .name {
+      color: #e6edf3;
+      flex: 1;
+    }
+
+    .name.dir-name {
+      color: #79c0ff;
+      font-weight: 500;
+    }
+
+    .badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      flex-shrink: 0;
+    }
+
+    .badge-ts   { background: #1f3a5f; color: #79c0ff; }
+    .badge-tsx  { background: #2d1f5f; color: #c9b1ff; }
+    .badge-js   { background: #3a2e00; color: #e3b341; }
+    .badge-mjs  { background: #3a2e00; color: #e3b341; }
+    .badge-sh   { background: #0d2d0d; color: #56d364; }
+    .badge-json { background: #1f2d1f; color: #7ee787; }
+    .badge-md   { background: #2d1d00; color: #ffa657; }
+    .badge-html { background: #2d1a00; color: #f78166; }
+
+    .hint {
+      font-size: 11px;
+      color: #484f58;
+      margin-left: 4px;
+    }
+
+    .children {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .children.collapsed {
+      display: none;
+    }
+
+    .count-badge {
+      font-size: 10px;
+      color: #484f58;
+      margin-left: 4px;
+    }
+
+    .section-divider {
+      height: 1px;
+      background: #21262d;
+      margin: 8px 0;
+    }
+
+    footer {
+      margin-top: 40px;
+      padding-top: 16px;
+      border-top: 1px solid #21262d;
+      display: flex;
+      gap: 24px;
+      color: #484f58;
+      font-size: 11px;
+    }
+
+    footer span { color: #6e7681; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>inklit</h1>
+  <div class="version">v0.0.9</div>
+  <div class="desc">Terminal dashboard for parallel AI coding agents</div>
+</header>
+
+<div class="tree" id="tree"></div>
+
+<footer>
+  <div>src files <span>22</span></div>
+  <div>test files <span>6</span></div>
+  <div>scripts <span>5</span></div>
+  <div>stack <span>TypeScript · React/Ink · Node 20+</span></div>
+</footer>
+
+<script>
+const tree = [
+  { type: 'dir', name: 'src', hint: 'TypeScript source', open: true, children: [
+    { type: 'dir', name: 'ui', hint: 'Ink terminal UI components', open: true, children: [
+      { type: 'file', name: 'App.tsx',             ext: 'tsx', hint: 'root Ink app, task list layout' },
+      { type: 'file', name: 'Inspector.tsx',       ext: 'tsx', hint: 'task detail pane' },
+      { type: 'file', name: 'DiffView.tsx',        ext: 'tsx', hint: 'git diff renderer' },
+      { type: 'file', name: 'FilesView.tsx',       ext: 'tsx', hint: 'changed files list' },
+      { type: 'file', name: 'CommandPalette.tsx',  ext: 'tsx', hint: 'keyboard command menu' },
+      { type: 'file', name: 'NewTaskPrompt.tsx',   ext: 'tsx', hint: 'create-task dialog' },
+      { type: 'file', name: 'SendInputPrompt.tsx', ext: 'tsx', hint: 'send message to agent' },
+      { type: 'file', name: 'FilterPrompt.tsx',    ext: 'tsx', hint: 'task filter input' },
+      { type: 'file', name: 'ConfirmPrompt.tsx',   ext: 'tsx', hint: 'confirmation dialog' },
+      { type: 'file', name: 'HelpOverlay.tsx',     ext: 'tsx', hint: 'keyboard shortcut help' },
+      { type: 'file', name: 'List.tsx',            ext: 'tsx', hint: 'scrollable list component' },
+      { type: 'file', name: 'StatusBar.tsx',       ext: 'tsx', hint: 'bottom status line' },
+      { type: 'file', name: 'MainVersionBar.tsx',  ext: 'tsx', hint: 'version display bar' },
+      { type: 'file', name: 'review.tsx',          ext: 'tsx', hint: 'task review view' },
+      { type: 'file', name: 'agentTranscript.ts',  ext: 'ts',  hint: 'parse agent output stream' },
+      { type: 'file', name: 'commands.ts',         ext: 'ts',  hint: 'command definitions' },
+      { type: 'file', name: 'followUps.ts',        ext: 'ts',  hint: 'follow-up suggestions' },
+      { type: 'file', name: 'icons.ts',            ext: 'ts',  hint: 'icon constants' },
+      { type: 'file', name: 'text.ts',             ext: 'ts',  hint: 'text helpers' },
+      { type: 'file', name: 'theme.ts',            ext: 'ts',  hint: 'color theme tokens' },
+      { type: 'file', name: 'windowing.ts',        ext: 'ts',  hint: 'viewport/scroll math' },
+    ]},
+    { type: 'file', name: 'index.tsx',   ext: 'tsx', hint: 'entry point, mounts Ink app' },
+    { type: 'file', name: 'agent.ts',   ext: 'ts',  hint: 'agent lifecycle, spawn + signal' },
+    { type: 'file', name: 'cli.ts',     ext: 'ts',  hint: 'CLI arg parsing' },
+    { type: 'file', name: 'model.ts',   ext: 'ts',  hint: 'task/agent data model' },
+    { type: 'file', name: 'notify.ts',  ext: 'ts',  hint: 'desktop notifications' },
+    { type: 'file', name: 'preview.ts', ext: 'ts',  hint: 'per-task preview servers' },
+    { type: 'file', name: 'state.ts',   ext: 'ts',  hint: 'global app state management' },
+    { type: 'file', name: 'wt.ts',      ext: 'ts',  hint: 'git worktree management' },
+    { type: 'file', name: 'zellij.ts',  ext: 'ts',  hint: 'zellij pane/tab integration' },
+  ]},
+  { type: 'dir', name: 'tests', hint: 'Node test runner', open: true, children: [
+    { type: 'file', name: 'agent.test.ts',    ext: 'ts', hint: 'agent spawn / signal tests' },
+    { type: 'file', name: 'commands.test.ts', ext: 'ts', hint: 'command palette tests' },
+    { type: 'file', name: 'preview.test.ts',  ext: 'ts', hint: 'preview server tests' },
+    { type: 'file', name: 'state.test.ts',    ext: 'ts', hint: 'state mutation tests' },
+    { type: 'file', name: 'ui-utils.test.ts', ext: 'ts', hint: 'UI utility tests' },
+    { type: 'file', name: 'wt.test.ts',       ext: 'ts', hint: 'worktree helper tests' },
+  ]},
+  { type: 'dir', name: 'scripts', hint: 'dev & smoke-test scripts', open: true, children: [
+    { type: 'file', name: 'smoke.mjs',           ext: 'mjs', hint: 'full smoke test run' },
+    { type: 'file', name: 'smoke-inspector.mjs', ext: 'mjs', hint: 'inspector smoke test' },
+    { type: 'file', name: 'smoke-state.mjs',     ext: 'mjs', hint: 'state smoke test' },
+    { type: 'file', name: 'smoke-kill.mjs',      ext: 'mjs', hint: 'agent kill smoke test' },
+    { type: 'file', name: 'demo.sh',             ext: 'sh',  hint: 'demo scenario script' },
+  ]},
+  { type: 'dir', name: 'dist', hint: 'compiled output (tsc)', open: false, children: [
+    { type: 'dir', name: 'ui', hint: 'compiled UI components', open: false, children: [
+      { type: 'file', name: 'App.js', ext: 'js' },
+      { type: 'file', name: 'Inspector.js', ext: 'js' },
+      { type: 'file', name: 'DiffView.js', ext: 'js' },
+      { type: 'file', name: '… (21 files)', ext: 'js' },
+    ]},
+    { type: 'file', name: 'index.js',   ext: 'js', hint: 'CLI entry (bin: inklit)' },
+    { type: 'file', name: 'agent.js',   ext: 'js' },
+    { type: 'file', name: 'cli.js',     ext: 'js' },
+    { type: 'file', name: 'model.js',   ext: 'js' },
+    { type: 'file', name: 'state.js',   ext: 'js' },
+    { type: 'file', name: 'wt.js',      ext: 'js' },
+    { type: 'file', name: '*.js.map',   ext: 'js', hint: 'source maps' },
+  ]},
+  { type: 'dir', name: 'basic-5-page-website', hint: 'example site artifact', open: false, children: [
+    { type: 'file', name: 'index.html',    ext: 'html' },
+    { type: 'file', name: 'about.html',    ext: 'html' },
+    { type: 'file', name: 'blog.html',     ext: 'html' },
+    { type: 'file', name: 'contact.html',  ext: 'html' },
+    { type: 'file', name: 'projects.html', ext: 'html' },
+    { type: 'file', name: 'services.html', ext: 'html' },
+  ]},
+  { type: 'dir', name: '.claude', hint: 'Claude Code config', open: false, children: [
+    { type: 'file', name: 'settings.local.json', ext: 'json', hint: 'local tool permissions' },
+  ]},
+  { type: 'file', name: 'package.json',   ext: 'json', hint: 'deps: ink, execa, react' },
+  { type: 'file', name: 'tsconfig.json',  ext: 'json', hint: 'TypeScript compiler config' },
+  { type: 'file', name: 'AGENTS.md',      ext: 'md',   hint: 'agent behavior docs' },
+  { type: 'file', name: 'README.md',      ext: 'md',   hint: 'project docs' },
+  { type: 'file', name: 'index.html',     ext: 'html', hint: 'this file' },
+];
+
+const extIcon = {
+  tsx:  '⚛',
+  ts:   '🔷',
+  js:   '📜',
+  mjs:  '📜',
+  sh:   '⚙',
+  json: '{}',
+  md:   '📄',
+  html: '🌐',
+};
+
+const dirIcon = '📁';
+const dirIconOpen = '📂';
+
+function badge(ext) {
+  if (!ext) return '';
+  return `<span class="badge badge-${ext}">${ext}</span>`;
+}
+
+function buildNode(node, depth) {
+  const indentHTML = Array.from({ length: depth }, (_, i) =>
+    `<div class="indent-segment"></div>`
+  ).join('');
+
+  if (node.type === 'dir') {
+    const id = `dir-${Math.random().toString(36).slice(2)}`;
+    const isOpen = node.open !== false;
+    const childCount = (node.children || []).filter(c => c.type === 'file').length;
+    const dirCount = (node.children || []).filter(c => c.type === 'dir').length;
+    const countStr = [
+      dirCount ? `${dirCount} dir${dirCount > 1 ? 's' : ''}` : '',
+      childCount ? `${childCount} file${childCount > 1 ? 's' : ''}` : '',
+    ].filter(Boolean).join(', ');
+
+    const caretSVG = `<svg viewBox="0 0 10 10" fill="currentColor"><polygon points="3,2 8,5 3,8"/></svg>`;
+
+    const rowHTML = `
+      <div class="row dir" onclick="toggle('${id}', this)">
+        <div class="indent">${indentHTML}</div>
+        <div class="caret ${isOpen ? 'open' : ''}" id="caret-${id}">${caretSVG}</div>
+        <span class="icon">${isOpen ? dirIconOpen : dirIcon}</span>
+        <span class="name dir-name">${node.name}/</span>
+        ${node.hint ? `<span class="hint">${node.hint}</span>` : ''}
+        <span class="count-badge">${countStr}</span>
+      </div>`;
+
+    const childrenHTML = (node.children || []).map(child => buildNode(child, depth + 1)).join('');
+
+    return `
+      <div class="node">
+        ${rowHTML}
+        <div class="children ${isOpen ? '' : 'collapsed'}" id="${id}">
+          ${childrenHTML}
+        </div>
+      </div>`;
+  } else {
+    const icon = extIcon[node.ext] || '📄';
+    return `
+      <div class="node">
+        <div class="row">
+          <div class="indent">${indentHTML}</div>
+          <div class="caret-placeholder"></div>
+          <span class="icon">${icon}</span>
+          <span class="name">${node.name}</span>
+          ${badge(node.ext)}
+          ${node.hint ? `<span class="hint">${node.hint}</span>` : ''}
+        </div>
+      </div>`;
+  }
+}
+
+function toggle(id, rowEl) {
+  const children = document.getElementById(id);
+  const caret = document.getElementById('caret-' + id);
+  const icon = rowEl.querySelector('.icon');
+  const isOpen = !children.classList.contains('collapsed');
+
+  if (isOpen) {
+    children.classList.add('collapsed');
+    caret.classList.remove('open');
+    icon.textContent = dirIcon;
+  } else {
+    children.classList.remove('collapsed');
+    caret.classList.add('open');
+    icon.textContent = dirIconOpen;
+  }
+}
+
+document.getElementById('tree').innerHTML = tree.map(n => buildNode(n, 0)).join('');
+</script>
+</body>
+</html>
