@@ -21,7 +21,6 @@ import { CommandPalette } from "./CommandPalette.js";
 import { agentTranscriptTail } from "./agentTranscript.js";
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
-import { ContextPickerPrompt } from "./ContextPickerPrompt.js";
 import { AiFollowUpOverlay } from "./AiFollowUpOverlay.js";
 import { GoalDecomposePrompt } from "./GoalDecomposePrompt.js";
 import {
@@ -152,8 +151,6 @@ type Action =
   | { type: "error"; message: string | null }
   | { type: "chord/set"; key: string | null }
   | { type: "overlaps/computed"; overlaps: Map<string, string[]> }
-  | { type: "mode/contextPicker"; agentKind: AgentKind }
-  | { type: "contextPicker/selectIndex"; index: number }
   | { type: "mode/aiFollowUpLoading" }
   | { type: "aiFollowUp/loaded"; followUps: SuggestedFollowUp[] }
   | { type: "aiFollowUp/selectNext" }
@@ -166,8 +163,6 @@ interface RenderState extends AppState {
   inspectorLoading: boolean;
   /** Sampled pane tails keyed by slug; retained for backward-compatible reducer flow. */
   agentTails: Map<string, string>;
-  /** Index into tasks[] for the context picker. */
-  contextPickerIndex: number;
 }
 
 const initial: RenderState = {
@@ -175,7 +170,6 @@ const initial: RenderState = {
   content: new Map(),
   inspectorLoading: false,
   agentTails: new Map(),
-  contextPickerIndex: 0,
 };
 
 function getContent(s: RenderState, slug: string | null): ModeContent {
@@ -663,10 +657,6 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, pendingChord: a.key };
     case "overlaps/computed":
       return { ...s, taskOverlaps: a.overlaps };
-    case "mode/contextPicker":
-      return { ...s, mode: "contextPicker", pendingAgentKind: a.agentKind, contextPickerIndex: 0 };
-    case "contextPicker/selectIndex":
-      return { ...s, contextPickerIndex: a.index };
     case "mode/aiFollowUpLoading":
       return { ...s, mode: "aiFollowUpLoading", aiFollowUps: [], aiFollowUpSelectedIndex: 0 };
     case "aiFollowUp/loaded":
@@ -1466,53 +1456,9 @@ export function App({ mainBranch = "main" }: AppProps) {
       }
       if (state.mode === "newTaskAgent") {
         if (key.escape) dispatch({ type: "mode/list" });
-        if (input === "c") dispatch({ type: "mode/contextPicker", agentKind: "claude" });
-        if (input === "x") dispatch({ type: "mode/contextPicker", agentKind: "codex" });
-        if (input === "o") dispatch({ type: "mode/contextPicker", agentKind: "opencode" });
-        return;
-      }
-      if (state.mode === "contextPicker") {
-        if (key.escape || input === "s") {
-          // Skip context — spawn without it.
-          void doSpawn(
-            state.pendingDescription,
-            state.pendingAgentKind ?? "claude",
-            state.pendingImagePath
-          );
-          return;
-        }
-        if (input === "j" || key.downArrow) {
-          const eligible = state.tasks.filter((t) => {
-            const lc = lifecycleForTask(t);
-            return lc === "done" || lc === "ready" || lc === "failed";
-          });
-          dispatch({
-            type: "contextPicker/selectIndex",
-            index: Math.min(eligible.length - 1, state.contextPickerIndex + 1),
-          });
-          return;
-        }
-        if (input === "k" || key.upArrow) {
-          dispatch({
-            type: "contextPicker/selectIndex",
-            index: Math.max(0, state.contextPickerIndex - 1),
-          });
-          return;
-        }
-        if (key.return) {
-          const eligible = state.tasks.filter((t) => {
-            const lc = lifecycleForTask(t);
-            return lc === "done" || lc === "ready" || lc === "failed";
-          });
-          const selected = eligible[state.contextPickerIndex];
-          void doSpawn(
-            state.pendingDescription,
-            state.pendingAgentKind ?? "claude",
-            state.pendingImagePath,
-            selected?.slug
-          );
-          return;
-        }
+        if (input === "c") void doSpawn(state.pendingDescription, "claude", state.pendingImagePath);
+        if (input === "x") void doSpawn(state.pendingDescription, "codex", state.pendingImagePath);
+        if (input === "o") void doSpawn(state.pendingDescription, "opencode", state.pendingImagePath);
         return;
       }
       if (state.mode === "spawning") return;
@@ -2101,24 +2047,15 @@ export function App({ mainBranch = "main" }: AppProps) {
     description: string,
     agent: AgentKind,
     imagePath?: string,
-    contextSourceSlug?: string
   ) {
     dispatch({ type: "mode/spawning" });
     try {
-      let contextSummary: string | undefined;
-      if (contextSourceSlug) {
-        const sourceTask = state.tasks.find((t) => t.slug === contextSourceSlug);
-        if (sourceTask) {
-          contextSummary = await gitDiff(sourceTask.path, targetBranch, 8000).catch(() => undefined);
-        }
-      }
       const res = await spawnAgent({
         description,
         agent,
         base: targetBranch === "main" ? undefined : targetBranch,
         anchorPaneId: pickStackAnchor(),
         imagePath: agent === "claude" ? imagePath : undefined,
-        contextSummary,
       });
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
@@ -2597,13 +2534,6 @@ export function App({ mainBranch = "main" }: AppProps) {
           />
         ) : state.mode === "newTaskAgent" ? (
           <AgentPicker label={state.pendingDescription} intent="spawn" />
-        ) : state.mode === "contextPicker" ? (
-          <ContextPickerPrompt
-            tasks={state.tasks}
-            selectedIndex={state.contextPickerIndex}
-            description={state.pendingDescription}
-            width={cols - 6}
-          />
         ) : state.mode === "aiFollowUpLoading" ? (
           <Box paddingX={1}>
             <Text color="yellow">Fetching AI follow-up suggestions…</Text>
