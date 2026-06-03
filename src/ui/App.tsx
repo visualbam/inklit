@@ -47,6 +47,7 @@ import {
   panesSnapshot,
 } from "../zellij.js";
 import { spawnAgent, resumeAgent } from "../agent.js";
+import { extractClipboardImage } from "../clipboard.js";
 import {
   getAgent,
   loadAll,
@@ -120,6 +121,9 @@ type Action =
   | { type: "inspector/loading"; loading: boolean }
   | { type: "inspector/scroll"; kind: ScrollKind; maxLines: number }
   | { type: "newTask/setDescription"; value: string }
+  | { type: "newTask/clipboardImage"; path: string }
+  | { type: "newTask/attachImage" }
+  | { type: "newTask/clearImage" }
   | { type: "mode/sendInput" }
   | { type: "mode/sending" }
   | { type: "mode/filter" }
@@ -395,14 +399,21 @@ function reducer(s: RenderState, a: Action): RenderState {
       };
     case "mode/resuming":
       return { ...s, mode: "resuming" };
-    case "mode/list":
+    case "mode/list": {
+      // Delete any unattached clipboard temp file so we don't leak /tmp images.
+      if (s.pendingClipboardImage) {
+        void fsPromises.unlink(s.pendingClipboardImage).catch(() => {});
+      }
       return {
         ...s,
         mode: "list",
         newTaskDescription: "",
         pendingResumeSlug: null,
         sendInputValue: "",
+        pendingClipboardImage: undefined,
+        pendingImagePath: undefined,
       };
+    }
     case "mode/sendInput":
       // Snap inspector to the live agent transcript so the user can see
       // exactly what they're typing into.
@@ -615,7 +626,17 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, inspectorOffsets: map };
     }
     case "newTask/setDescription":
-      return { ...s, newTaskDescription: a.value };
+      return { ...s, newTaskDescription: a.value.replace(/[^\x20-\x7E-￿]/g, "") };
+    case "newTask/clipboardImage":
+      return { ...s, pendingClipboardImage: a.path };
+    case "newTask/attachImage":
+      return {
+        ...s,
+        pendingImagePath: s.pendingClipboardImage,
+        pendingClipboardImage: undefined,
+      };
+    case "newTask/clearImage":
+      return { ...s, pendingClipboardImage: undefined, pendingImagePath: undefined };
     case "flash":
       return { ...s, flash: a.message };
     case "error":
@@ -1350,6 +1371,18 @@ export function App({ mainBranch = "main" }: AppProps) {
     };
   }, [state.selectedSlug, state.inspectorMode, state.tasks, targetBranch]);
 
+  // Proactively check clipboard for an image when entering new-task mode.
+  useEffect(() => {
+    if (state.mode !== "newTaskDescription") return;
+    let cancelled = false;
+    void extractClipboardImage().then((path) => {
+      if (!cancelled && path) dispatch({ type: "newTask/clipboardImage", path });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.mode]);
+
   // Flash auto-clear.
   useEffect(() => {
     if (!state.flash) return;
@@ -1369,11 +1402,14 @@ export function App({ mainBranch = "main" }: AppProps) {
       // Prompts handle their own input.
       if (state.mode === "newTaskDescription") {
         if (key.escape) dispatch({ type: "mode/list" });
+        if (key.ctrl && input === "v" && state.pendingClipboardImage) {
+          dispatch({ type: "newTask/attachImage" });
+        }
         return;
       }
       if (state.mode === "newTaskAgent") {
         if (key.escape) dispatch({ type: "mode/list" });
-        if (input === "c") void doSpawn(state.pendingDescription, "claude");
+        if (input === "c") void doSpawn(state.pendingDescription, "claude", state.pendingImagePath);
         if (input === "x") void doSpawn(state.pendingDescription, "codex");
         if (input === "o") void doSpawn(state.pendingDescription, "opencode");
         return;
@@ -1911,7 +1947,7 @@ export function App({ mainBranch = "main" }: AppProps) {
     return closed;
   }
 
-  async function doSpawn(description: string, agent: AgentKind) {
+  async function doSpawn(description: string, agent: AgentKind, imagePath?: string) {
     dispatch({ type: "mode/spawning" });
     try {
       const res = await spawnAgent({
@@ -1919,6 +1955,7 @@ export function App({ mainBranch = "main" }: AppProps) {
         agent,
         base: targetBranch === "main" ? undefined : targetBranch,
         anchorPaneId: pickStackAnchor(),
+        imagePath: agent === "claude" ? imagePath : undefined,
       });
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
@@ -2377,6 +2414,8 @@ export function App({ mainBranch = "main" }: AppProps) {
               dispatch({ type: "mode/newTaskAgent", description: trimmed });
             }}
             onCancel={() => dispatch({ type: "mode/list" })}
+            hasClipboardImage={!!state.pendingClipboardImage}
+            imageAttached={!!state.pendingImagePath}
           />
         ) : state.mode === "newTaskAgent" ? (
           <AgentPicker label={state.pendingDescription} intent="spawn" />

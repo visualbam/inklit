@@ -30,14 +30,21 @@ export async function spawnAgent(opts: {
   cwd?: string;
   /** Optional pane id of an existing agent to stack onto. */
   anchorPaneId?: string | null;
+  /** Path to an image file to include as context in the initial prompt (claude only). */
+  imagePath?: string;
 }): Promise<SpawnResult> {
   const slug = opts.branch ?? slugify(opts.description);
+
+  const effectiveDescription =
+    opts.imagePath
+      ? `${opts.description}\n\nImage context: ${opts.imagePath}`
+      : opts.description;
 
   let switchArgs: string[];
   if (opts.agent === "claude") {
     switchArgs = ["switch", "-c"];
     if (opts.base) switchArgs.push("--base", opts.base);
-    switchArgs.push(slug, "-x", "claude", "--", ...launchArgsFor("claude", opts.description));
+    switchArgs.push(slug, "-x", "claude", "--", ...launchArgsFor("claude", effectiveDescription));
   } else {
     const wrapPath = await ensureWrapper();
     // Wrapper's $@ must be a complete command: agent binary + its args.

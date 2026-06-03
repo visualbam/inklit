@@ -8,9 +8,13 @@ interface Props {
   onChange: (s: string) => void;
   onSubmit: (s: string) => void;
   onCancel: () => void;
+  /** Image detected in clipboard on mode entry but not yet attached. */
+  hasClipboardImage?: boolean;
+  /** User has explicitly attached the clipboard image (ctrl+v). */
+  imageAttached?: boolean;
 }
 
-export function DescriptionPrompt({ value, onChange, onSubmit }: Props) {
+export function DescriptionPrompt({ value, onChange, onSubmit, hasClipboardImage, imageAttached }: Props) {
   return (
     <Box
       borderStyle="round"
@@ -24,6 +28,11 @@ export function DescriptionPrompt({ value, onChange, onSubmit }: Props) {
       <Text dimColor>
         Describe what the agent should do. Enter to continue, esc to cancel.
       </Text>
+      {imageAttached ? (
+        <Text color={UI.accent}>[image attached]</Text>
+      ) : hasClipboardImage ? (
+        <Text dimColor>ctrl+v  attach clipboard image</Text>
+      ) : null}
       <Box marginTop={1}>
         <Text color={UI.accent}>{">  "}</Text>
         <TextInput value={value} onChange={onChange} onSubmit={onSubmit} />

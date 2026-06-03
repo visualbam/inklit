@@ -166,6 +166,10 @@ export interface AppState {
   pendingResumeSlug: string | null;
   /** Buffer for the inline send-to-agent prompt (i keybind). */
   sendInputValue: string;
+  /** Temp file path of a clipboard image detected when entering new-task mode. Not yet attached. */
+  pendingClipboardImage?: string;
+  /** Temp file path of a clipboard image the user has explicitly attached (ctrl+v). */
+  pendingImagePath?: string;
   /**
    * Inspector scroll offset, keyed by `${slug}:${mode}`. Value is the number of
    * lines hidden above the viewport. Sentinel `-1` means "auto-tail to the
