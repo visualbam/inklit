@@ -7,6 +7,7 @@ export const initialState = {
     listDensity: "detailed",
     showArchived: false,
     newTaskDescription: "",
+    newTaskCursor: 0,
     flash: null,
     error: null,
     pendingChord: null,

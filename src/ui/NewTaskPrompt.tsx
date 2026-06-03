@@ -1,23 +1,27 @@
 import React from "react";
 import { Box, Text } from "ink";
-import TextInput from "ink-text-input";
 import { UI } from "./theme.js";
 
 interface Props {
   value: string;
-  onChange: (s: string) => void;
-  onSubmit: (s: string) => void;
-  onCancel: () => void;
+  /** Cursor offset into `value`; input is handled by App's useInput. */
+  cursor: number;
+  /** Explicit box width — keeps layout stable across async (paste) re-renders. */
+  width: number;
   /** Image detected in clipboard on mode entry but not yet attached. */
   hasClipboardImage?: boolean;
 }
 
-export function DescriptionPrompt({ value, onChange, onSubmit, hasClipboardImage }: Props) {
+export function DescriptionPrompt({ value, cursor, width, hasClipboardImage }: Props) {
+  const before = value.slice(0, cursor);
+  const at = value.slice(cursor, cursor + 1) || " ";
+  const after = value.slice(cursor + 1);
   return (
     <Box
       borderStyle="round"
       borderColor={UI.accent}
       paddingX={1}
+      width={width}
       flexDirection="column"
     >
       <Text bold color={UI.accent}>
@@ -30,8 +34,12 @@ export function DescriptionPrompt({ value, onChange, onSubmit, hasClipboardImage
         <Text dimColor>ctrl+v  attach clipboard image</Text>
       ) : null}
       <Box marginTop={1}>
-        <Text color={UI.accent}>{">  "}</Text>
-        <TextInput value={value} onChange={onChange} onSubmit={onSubmit} />
+        <Text>
+          <Text color={UI.accent}>{">  "}</Text>
+          <Text>{before}</Text>
+          <Text inverse>{at}</Text>
+          <Text>{after}</Text>
+        </Text>
       </Box>
     </Box>
   );

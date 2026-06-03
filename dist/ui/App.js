@@ -24,7 +24,7 @@ import { computeOverlaps } from "../overlap.js";
 import { fetchAiFollowUps } from "../ai.js";
 import { inSession, dumpScreen, focusPaneByName, focusPaneId, focusOwnPane, closePaneByName, closePaneById, sendKeysToPaneId, sendKeysToSlug, panesSnapshot, } from "../zellij.js";
 import { spawnAgent, resumeAgent, removeTaskSummary } from "../agent.js";
-import { extractClipboardImage } from "../clipboard.js";
+import { extractClipboardImage, extractClipboardImageSync } from "../clipboard.js";
 import { getAgent, loadAll, recordPane, clearPane, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, clearStaleApplyOperations, signalDir, } from "../state.js";
 import { clearTaskPreview } from "../preview.js";
 import { notify } from "../notify.js";
@@ -209,7 +209,7 @@ function reducer(s, a) {
                 };
             }
         case "mode/newTaskDescription":
-            return { ...s, mode: "newTaskDescription", newTaskDescription: "" };
+            return { ...s, mode: "newTaskDescription", newTaskDescription: "", newTaskCursor: 0 };
         case "mode/newTaskAgent":
             return {
                 ...s,
@@ -248,10 +248,11 @@ function reducer(s, a) {
                 ...s,
                 mode: "list",
                 newTaskDescription: "",
+                newTaskCursor: 0,
                 pendingResumeSlug: null,
                 sendInputValue: "",
                 pendingClipboardImage: undefined,
-                pendingImagePath: undefined,
+                pendingAttachedImages: undefined,
             };
         }
         case "mode/sendInput":
@@ -429,18 +430,27 @@ function reducer(s, a) {
             map.set(key, next);
             return { ...s, inspectorOffsets: map };
         }
-        case "newTask/setDescription":
-            return { ...s, newTaskDescription: a.value.replace(/[^\x20-\x7E-￿]/g, "") };
+        case "newTask/edit": {
+            const cleaned = a.value.replace(/[^\x20-\x7E-￿]/g, "");
+            return {
+                ...s,
+                newTaskDescription: cleaned,
+                newTaskCursor: Math.max(0, Math.min(a.cursor, cleaned.length)),
+            };
+        }
         case "newTask/clipboardImage":
             return { ...s, pendingClipboardImage: a.path };
         case "newTask/attachImage":
             return {
                 ...s,
-                pendingImagePath: s.pendingClipboardImage,
+                pendingAttachedImages: [
+                    ...(s.pendingAttachedImages ?? []),
+                    s.pendingClipboardImage,
+                ],
                 pendingClipboardImage: undefined,
             };
         case "newTask/clearImage":
-            return { ...s, pendingClipboardImage: undefined, pendingImagePath: undefined };
+            return { ...s, pendingClipboardImage: undefined, pendingAttachedImages: undefined };
         case "flash":
             return { ...s, flash: a.message };
         case "error":
@@ -1194,12 +1204,61 @@ export function App({ mainBranch = "main" }) {
         return () => clearTimeout(id);
     }, [state.error]);
     useInput((input, key) => {
-        // Prompts handle their own input.
+        // Controlled single-line input. App owns every keystroke here so that
+        // Ctrl+V triggers image attach rather than inserting a literal "v"
+        // (ink-text-input would otherwise consume the key first).
         if (state.mode === "newTaskDescription") {
-            if (key.escape)
+            const value = state.newTaskDescription;
+            const cur = state.newTaskCursor;
+            if (key.escape) {
                 dispatch({ type: "mode/list" });
-            if (key.ctrl && input === "v" && state.pendingClipboardImage) {
+                return;
+            }
+            if (key.return) {
+                const trimmed = value.trim();
+                if (!trimmed)
+                    dispatch({ type: "mode/list" });
+                else
+                    dispatch({ type: "mode/newTaskAgent", description: trimmed });
+                return;
+            }
+            if (key.ctrl && input === "v") {
+                // Resolve the image synchronously so every dispatch below lands inside
+                // Ink's batched input handler — an async dispatch from a promise
+                // renders outside Ink's cycle and corrupts the terminal output.
+                const path = state.pendingClipboardImage ?? extractClipboardImageSync();
+                if (!path) {
+                    dispatch({ type: "flash", message: "No image in clipboard" });
+                    return;
+                }
+                if (!state.pendingClipboardImage) {
+                    dispatch({ type: "newTask/clipboardImage", path });
+                }
+                const n = (state.pendingAttachedImages?.length ?? 0) + 1;
+                const token = ` [image #${n}]`;
+                const nv = value.slice(0, cur) + token + value.slice(cur);
                 dispatch({ type: "newTask/attachImage" });
+                dispatch({ type: "newTask/edit", value: nv, cursor: cur + token.length });
+                return;
+            }
+            if (key.leftArrow) {
+                dispatch({ type: "newTask/edit", value, cursor: Math.max(0, cur - 1) });
+                return;
+            }
+            if (key.rightArrow) {
+                dispatch({ type: "newTask/edit", value, cursor: Math.min(value.length, cur + 1) });
+                return;
+            }
+            if (key.backspace || key.delete) {
+                if (cur > 0) {
+                    const nv = value.slice(0, cur - 1) + value.slice(cur);
+                    dispatch({ type: "newTask/edit", value: nv, cursor: cur - 1 });
+                }
+                return;
+            }
+            if (input && !key.ctrl && !key.meta) {
+                const nv = value.slice(0, cur) + input + value.slice(cur);
+                dispatch({ type: "newTask/edit", value: nv, cursor: cur + input.length });
             }
             return;
         }
@@ -1207,11 +1266,11 @@ export function App({ mainBranch = "main" }) {
             if (key.escape)
                 dispatch({ type: "mode/list" });
             if (input === "c")
-                void doSpawn(state.pendingDescription, "claude", state.pendingImagePath);
+                void doSpawn(state.pendingDescription, "claude", state.pendingAttachedImages);
             if (input === "x")
-                void doSpawn(state.pendingDescription, "codex", state.pendingImagePath);
+                void doSpawn(state.pendingDescription, "codex", state.pendingAttachedImages);
             if (input === "o")
-                void doSpawn(state.pendingDescription, "opencode", state.pendingImagePath);
+                void doSpawn(state.pendingDescription, "opencode", state.pendingAttachedImages);
             return;
         }
         if (state.mode === "spawning")
@@ -1809,7 +1868,7 @@ export function App({ mainBranch = "main" }) {
             await focusOwnPane().catch(() => false);
         return closed;
     }
-    async function doSpawn(description, agent, imagePath) {
+    async function doSpawn(description, agent, imagePaths) {
         dispatch({ type: "mode/spawning" });
         try {
             const res = await spawnAgent({
@@ -1817,7 +1876,7 @@ export function App({ mainBranch = "main" }) {
                 agent,
                 base: targetBranch === "main" ? undefined : targetBranch,
                 anchorPaneId: pickStackAnchor(),
-                imagePath: agent === "claude" ? imagePath : undefined,
+                imagePaths,
             });
             dispatch({ type: "mode/list" });
             dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
@@ -2226,14 +2285,7 @@ export function App({ mainBranch = "main" }) {
         React.createElement(MainVersionBar, { mainVersion: state.mainVersion, targetBranch: targetBranch, tasks: state.tasks, visibleTaskCount: visibleTasks.length, filterQuery: state.filterQuery, width: cols - 2 }),
         React.createElement(Box, { flexDirection: "column", height: listHeight },
             React.createElement(TaskList, { tasks: visibleTasks, selectedSlug: state.selectedSlug, totalTasks: state.tasks.length, filterQuery: state.filterQuery, density: state.listDensity, width: cols - 2, height: listHeight, overlaps: state.taskOverlaps })),
-        React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "newTaskDescription" ? (React.createElement(DescriptionPrompt, { value: state.newTaskDescription, onChange: (v) => dispatch({ type: "newTask/setDescription", value: v }), onSubmit: (v) => {
-                const trimmed = v.trim();
-                if (!trimmed) {
-                    dispatch({ type: "mode/list" });
-                    return;
-                }
-                dispatch({ type: "mode/newTaskAgent", description: trimmed });
-            }, onCancel: () => dispatch({ type: "mode/list" }), hasClipboardImage: !!state.pendingClipboardImage, imageAttached: !!state.pendingImagePath })) : state.mode === "newTaskAgent" ? (React.createElement(AgentPicker, { label: state.pendingDescription, intent: "spawn" })) : state.mode === "aiFollowUpLoading" ? (React.createElement(Box, { paddingX: 1 },
+        React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "newTaskDescription" ? (React.createElement(DescriptionPrompt, { value: state.newTaskDescription, cursor: state.newTaskCursor, width: cols - 2, hasClipboardImage: !!state.pendingClipboardImage })) : state.mode === "newTaskAgent" ? (React.createElement(AgentPicker, { label: state.pendingDescription, intent: "spawn" })) : state.mode === "aiFollowUpLoading" ? (React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { color: "yellow" }, "Fetching AI follow-up suggestions\u2026"))) : state.mode === "aiFollowUpPicker" ? (React.createElement(AiFollowUpOverlay, { followUps: state.aiFollowUps, selectedIndex: state.aiFollowUpSelectedIndex, taskSlug: state.selectedSlug ?? "", width: cols - 6 })) : state.mode === "goalDecompose" ? (React.createElement(GoalDecomposePrompt, { onSpawnAll: (subtasks) => {
                 dispatch({ type: "mode/spawning" });
                 (async () => {

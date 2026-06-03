@@ -1,15 +1,20 @@
 import React from "react";
 import { Box, Text } from "ink";
-import TextInput from "ink-text-input";
 import { UI } from "./theme.js";
-export function DescriptionPrompt({ value, onChange, onSubmit, hasClipboardImage, imageAttached }) {
-    return (React.createElement(Box, { borderStyle: "round", borderColor: UI.accent, paddingX: 1, flexDirection: "column" },
+export function DescriptionPrompt({ value, cursor, width, hasClipboardImage }) {
+    const before = value.slice(0, cursor);
+    const at = value.slice(cursor, cursor + 1) || " ";
+    const after = value.slice(cursor + 1);
+    return (React.createElement(Box, { borderStyle: "round", borderColor: UI.accent, paddingX: 1, width: width, flexDirection: "column" },
         React.createElement(Text, { bold: true, color: UI.accent }, "New agent task"),
         React.createElement(Text, { dimColor: true }, "Describe what the agent should do. Enter to continue, esc to cancel."),
-        imageAttached ? (React.createElement(Text, { color: UI.accent }, "[image attached]")) : hasClipboardImage ? (React.createElement(Text, { dimColor: true }, "ctrl+v  attach clipboard image")) : null,
+        hasClipboardImage ? (React.createElement(Text, { dimColor: true }, "ctrl+v  attach clipboard image")) : null,
         React.createElement(Box, { marginTop: 1 },
-            React.createElement(Text, { color: UI.accent }, ">  "),
-            React.createElement(TextInput, { value: value, onChange: onChange, onSubmit: onSubmit }))));
+            React.createElement(Text, null,
+                React.createElement(Text, { color: UI.accent }, ">  "),
+                React.createElement(Text, null, before),
+                React.createElement(Text, { inverse: true }, at),
+                React.createElement(Text, null, after)))));
 }
 export function AgentPicker({ label, intent = "spawn" }) {
     const heading = intent === "resume" ? "Resume which agent?" : "Pick agent for:";

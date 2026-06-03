@@ -26,9 +26,11 @@ export async function spawnAgent(opts) {
     const mainPath = opts.cwd ?? process.cwd();
     const tasksDir = join(mainPath, ".inklit", "tasks");
     await fs.mkdir(tasksDir, { recursive: true }).catch(() => { });
-    const baseDescription = opts.imagePath
-        ? `${opts.description}\n\nImage context: ${opts.imagePath}`
-        : opts.description;
+    const imageSection = opts.imagePaths?.length
+        ? "\n\nImage context:\n" +
+            opts.imagePaths.map((p, i) => `[image #${i + 1}]: ${p}`).join("\n")
+        : "";
+    const baseDescription = opts.description + imageSection;
     const effectiveDescription = baseDescription + INKLIT_INSTRUCTION(tasksDir, slug);
     let switchArgs;
     if (opts.agent === "claude") {
@@ -40,7 +42,9 @@ export async function spawnAgent(opts) {
     else {
         const wrapPath = await ensureWrapper();
         // Wrapper's $@ must be a complete command: agent binary + its args.
-        const agentArgs = [opts.agent, ...launchArgsFor(opts.agent, opts.description)];
+        // baseDescription carries the image-context section so codex/opencode get
+        // the same pasted-image paths claude does.
+        const agentArgs = [opts.agent, ...launchArgsFor(opts.agent, baseDescription)];
         switchArgs = wrappedAgentSwitchArgs(slug, true, opts.base, agentArgs, wrapPath);
     }
     const paneId = await spawnPane({

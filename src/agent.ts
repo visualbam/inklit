@@ -43,7 +43,7 @@ export async function spawnAgent(opts: {
   cwd?: string;
   /** Optional pane id of an existing agent to stack onto. */
   anchorPaneId?: string | null;
-  /** Paths to image files to include as context in the initial prompt (claude only). */
+  /** Paths to image files to include as context in the initial prompt. */
   imagePaths?: string[];
 }): Promise<SpawnResult> {
   const slug = opts.branch ?? slugify(opts.description);
@@ -66,7 +66,9 @@ export async function spawnAgent(opts: {
   } else {
     const wrapPath = await ensureWrapper();
     // Wrapper's $@ must be a complete command: agent binary + its args.
-    const agentArgs = [opts.agent, ...launchArgsFor(opts.agent, opts.description)];
+    // baseDescription carries the image-context section so codex/opencode get
+    // the same pasted-image paths claude does.
+    const agentArgs = [opts.agent, ...launchArgsFor(opts.agent, baseDescription)];
     switchArgs = wrappedAgentSwitchArgs(slug, true, opts.base, agentArgs, wrapPath);
   }
 

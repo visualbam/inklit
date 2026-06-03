@@ -160,6 +160,8 @@ export interface AppState {
   /** Persistent task board filter. */
   filterQuery: string;
   newTaskDescription: string;
+  /** Cursor offset into newTaskDescription for the controlled new-task input. */
+  newTaskCursor: number;
   flash: string | null;
   error: string | null;
   pendingChord: string | null;
@@ -205,6 +207,7 @@ export const initialState: AppState = {
   listDensity: "detailed",
   showArchived: false,
   newTaskDescription: "",
+  newTaskCursor: 0,
   flash: null,
   error: null,
   pendingChord: null,

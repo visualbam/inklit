@@ -52,7 +52,7 @@ import {
   panesSnapshot,
 } from "../zellij.js";
 import { spawnAgent, resumeAgent, removeTaskSummary } from "../agent.js";
-import { extractClipboardImage } from "../clipboard.js";
+import { extractClipboardImage, extractClipboardImageSync } from "../clipboard.js";
 import {
   getAgent,
   loadAll,
@@ -126,7 +126,7 @@ type Action =
   | { type: "inspector/data"; slug: string; key: keyof ModeContent; value: any }
   | { type: "inspector/loading"; loading: boolean }
   | { type: "inspector/scroll"; kind: ScrollKind; maxLines: number }
-  | { type: "newTask/setDescription"; value: string }
+  | { type: "newTask/edit"; value: string; cursor: number }
   | { type: "newTask/clipboardImage"; path: string }
   | { type: "newTask/attachImage" }
   | { type: "newTask/clearImage" }
@@ -381,7 +381,7 @@ function reducer(s: RenderState, a: Action): RenderState {
         };
       }
     case "mode/newTaskDescription":
-      return { ...s, mode: "newTaskDescription", newTaskDescription: "" };
+      return { ...s, mode: "newTaskDescription", newTaskDescription: "", newTaskCursor: 0 };
     case "mode/newTaskAgent":
       return {
         ...s,
@@ -420,6 +420,7 @@ function reducer(s: RenderState, a: Action): RenderState {
         ...s,
         mode: "list",
         newTaskDescription: "",
+        newTaskCursor: 0,
         pendingResumeSlug: null,
         sendInputValue: "",
         pendingClipboardImage: undefined,
@@ -637,8 +638,14 @@ function reducer(s: RenderState, a: Action): RenderState {
       map.set(key, next);
       return { ...s, inspectorOffsets: map };
     }
-    case "newTask/setDescription":
-      return { ...s, newTaskDescription: a.value.replace(/[^\x20-\x7E-￿]/g, "") };
+    case "newTask/edit": {
+      const cleaned = a.value.replace(/[^\x20-\x7E-￿]/g, "");
+      return {
+        ...s,
+        newTaskDescription: cleaned,
+        newTaskCursor: Math.max(0, Math.min(a.cursor, cleaned.length)),
+      };
+    }
     case "newTask/clipboardImage":
       return { ...s, pendingClipboardImage: a.path };
     case "newTask/attachImage":
@@ -1449,34 +1456,59 @@ export function App({ mainBranch = "main" }: AppProps) {
 
   useInput(
     (input, key) => {
-      // Prompts handle their own input.
+      // Controlled single-line input. App owns every keystroke here so that
+      // Ctrl+V triggers image attach rather than inserting a literal "v"
+      // (ink-text-input would otherwise consume the key first).
       if (state.mode === "newTaskDescription") {
-        if (key.escape) dispatch({ type: "mode/list" });
+        const value = state.newTaskDescription;
+        const cur = state.newTaskCursor;
+        if (key.escape) {
+          dispatch({ type: "mode/list" });
+          return;
+        }
+        if (key.return) {
+          const trimmed = value.trim();
+          if (!trimmed) dispatch({ type: "mode/list" });
+          else dispatch({ type: "mode/newTaskAgent", description: trimmed });
+          return;
+        }
         if (key.ctrl && input === "v") {
+          // Resolve the image synchronously so every dispatch below lands inside
+          // Ink's batched input handler — an async dispatch from a promise
+          // renders outside Ink's cycle and corrupts the terminal output.
+          const path = state.pendingClipboardImage ?? extractClipboardImageSync();
+          if (!path) {
+            dispatch({ type: "flash", message: "No image in clipboard" });
+            return;
+          }
+          if (!state.pendingClipboardImage) {
+            dispatch({ type: "newTask/clipboardImage", path });
+          }
           const n = (state.pendingAttachedImages?.length ?? 0) + 1;
-          const snapshot = state.newTaskDescription;
-          const finishAttach = () => {
-            dispatch({ type: "newTask/attachImage" });
-            setTimeout(() => {
-              dispatch({ type: "newTask/setDescription", value: snapshot + ` [image #${n}]` });
-            }, 0);
-          };
-          if (state.pendingClipboardImage) {
-            finishAttach();
-          } else {
-            void extractClipboardImage().then((path) => {
-              if (path) {
-                dispatch({ type: "newTask/clipboardImage", path });
-                finishAttach();
-              } else {
-                // No image in clipboard — swallow the 'v' TextInput inserted
-                setTimeout(() => {
-                  dispatch({ type: "newTask/setDescription", value: snapshot });
-                }, 0);
-              }
-            });
+          const token = ` [image #${n}]`;
+          const nv = value.slice(0, cur) + token + value.slice(cur);
+          dispatch({ type: "newTask/attachImage" });
+          dispatch({ type: "newTask/edit", value: nv, cursor: cur + token.length });
+          return;
+        }
+        if (key.leftArrow) {
+          dispatch({ type: "newTask/edit", value, cursor: Math.max(0, cur - 1) });
+          return;
+        }
+        if (key.rightArrow) {
+          dispatch({ type: "newTask/edit", value, cursor: Math.min(value.length, cur + 1) });
+          return;
+        }
+        if (key.backspace || key.delete) {
+          if (cur > 0) {
+            const nv = value.slice(0, cur - 1) + value.slice(cur);
+            dispatch({ type: "newTask/edit", value: nv, cursor: cur - 1 });
           }
           return;
+        }
+        if (input && !key.ctrl && !key.meta) {
+          const nv = value.slice(0, cur) + input + value.slice(cur);
+          dispatch({ type: "newTask/edit", value: nv, cursor: cur + input.length });
         }
         return;
       }
@@ -2081,7 +2113,7 @@ export function App({ mainBranch = "main" }: AppProps) {
         agent,
         base: targetBranch === "main" ? undefined : targetBranch,
         anchorPaneId: pickStackAnchor(),
-        imagePaths: agent === "claude" ? imagePaths : undefined,
+        imagePaths,
       });
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
@@ -2546,18 +2578,8 @@ export function App({ mainBranch = "main" }: AppProps) {
         {state.mode === "newTaskDescription" ? (
           <DescriptionPrompt
             value={state.newTaskDescription}
-            onChange={(v) =>
-              dispatch({ type: "newTask/setDescription", value: v })
-            }
-            onSubmit={(v) => {
-              const trimmed = v.trim();
-              if (!trimmed) {
-                dispatch({ type: "mode/list" });
-                return;
-              }
-              dispatch({ type: "mode/newTaskAgent", description: trimmed });
-            }}
-            onCancel={() => dispatch({ type: "mode/list" })}
+            cursor={state.newTaskCursor}
+            width={cols - 2}
             hasClipboardImage={!!state.pendingClipboardImage}
           />
         ) : state.mode === "newTaskAgent" ? (
