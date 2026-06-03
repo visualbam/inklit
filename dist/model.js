@@ -15,6 +15,10 @@ export const initialState = {
     sendInputValue: "",
     filterQuery: "",
     inspectorOffsets: new Map(),
+    taskOverlaps: new Map(),
+    pendingAgentKind: null,
+    aiFollowUps: [],
+    aiFollowUpSelectedIndex: 0,
 };
 export function lifecycleForState(state) {
     switch (state) {

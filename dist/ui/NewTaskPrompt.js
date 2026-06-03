@@ -2,10 +2,11 @@ import React from "react";
 import { Box, Text } from "ink";
 import TextInput from "ink-text-input";
 import { UI } from "./theme.js";
-export function DescriptionPrompt({ value, onChange, onSubmit }) {
+export function DescriptionPrompt({ value, onChange, onSubmit, hasClipboardImage, imageAttached }) {
     return (React.createElement(Box, { borderStyle: "round", borderColor: UI.accent, paddingX: 1, flexDirection: "column" },
         React.createElement(Text, { bold: true, color: UI.accent }, "New agent task"),
         React.createElement(Text, { dimColor: true }, "Describe what the agent should do. Enter to continue, esc to cancel."),
+        imageAttached ? (React.createElement(Text, { color: UI.accent }, "[image attached]")) : hasClipboardImage ? (React.createElement(Text, { dimColor: true }, "ctrl+v  attach clipboard image")) : null,
         React.createElement(Box, { marginTop: 1 },
             React.createElement(Text, { color: UI.accent }, ">  "),
             React.createElement(TextInput, { value: value, onChange: onChange, onSubmit: onSubmit }))));

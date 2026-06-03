@@ -4,6 +4,7 @@ import { spawnPane } from "./zellij.js";
 import { slugify } from "./wt.js";
 import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
+const INKLIT_INSTRUCTION = (tasksDir, slug) => `\n\n---\nBefore starting: check ${tasksDir}/ for prior-task summaries and read any that seem relevant.\nWhen done: write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed.`;
 /**
  * Spawn a new agent task in its own worktree + zellij pane.
  *
@@ -15,12 +16,19 @@ import { refreshTaskPreview } from "./preview.js";
  */
 export async function spawnAgent(opts) {
     const slug = opts.branch ?? slugify(opts.description);
+    const mainPath = opts.cwd ?? process.cwd();
+    const tasksDir = join(mainPath, ".inklit", "tasks");
+    await fs.mkdir(tasksDir, { recursive: true }).catch(() => { });
+    const baseDescription = opts.imagePath
+        ? `${opts.description}\n\nImage context: ${opts.imagePath}`
+        : opts.description;
+    const effectiveDescription = baseDescription + INKLIT_INSTRUCTION(tasksDir, slug);
     let switchArgs;
     if (opts.agent === "claude") {
         switchArgs = ["switch", "-c"];
         if (opts.base)
             switchArgs.push("--base", opts.base);
-        switchArgs.push(slug, "-x", "claude", "--", ...launchArgsFor("claude", opts.description));
+        switchArgs.push(slug, "-x", "claude", "--", ...launchArgsFor("claude", effectiveDescription));
     }
     else {
         const wrapPath = await ensureWrapper();
@@ -42,7 +50,6 @@ export async function spawnAgent(opts) {
     await recordSpawn(slug, opts.agent, paneId).catch(() => { });
     void refreshTaskPreview(slug, opts.cwd).catch(() => { });
     if (opts.agent === "claude") {
-        const mainPath = opts.cwd ?? process.cwd();
         void scheduleStopHook(slug, mainPath + "." + slug);
     }
     return { slug, paneId };

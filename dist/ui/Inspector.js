@@ -9,7 +9,7 @@ import { suggestedFollowUps } from "./followUps.js";
 import { reviewSentence, reviewSummary } from "./review.js";
 import { padRight, truncate } from "./text.js";
 import { windowWithMarkers } from "./windowing.js";
-export function Inspector({ task, mode, targetBranch, diff, log, agent, files, loading, height, width, offset, }) {
+export function Inspector({ task, mode, targetBranch, diff, log, agent, files, loading, height, width, offset, overlaps, }) {
     // Reserve header, status strip, mode tabs, footer, and spacing inside the box.
     const maxLines = Math.max(3, height - 6);
     const title = task ? task.slug : "(no selection)";
@@ -22,7 +22,7 @@ export function Inspector({ task, mode, targetBranch, diff, log, agent, files, l
             React.createElement(Text, { bold: true }, truncate(header, width - 2))),
         task ? (React.createElement(TaskStatusStrip, { task: task, targetBranch: targetBranch, width: width })) : null,
         React.createElement(ModeTabs, { active: mode }),
-        React.createElement(Box, { marginTop: 1, flexDirection: "column", flexGrow: 1 }, !task ? (React.createElement(Text, { dimColor: true }, "nothing selected")) : loading ? (React.createElement(Text, { dimColor: true }, "loading\u2026")) : mode === "task" ? (React.createElement(TaskOverview, { task: task, targetBranch: targetBranch, maxLines: maxLines, offset: offset, width: width })) : mode === "diff" ? (React.createElement(DiffView, { diff: diff, maxLines: maxLines, offset: offset, width: contentWidth })) : mode === "files" ? (React.createElement(FilesView, { entries: files, targetBranch: targetBranch, maxLines: maxLines, offset: offset, width: contentWidth })) : mode === "log" ? (React.createElement(PlainText, { text: log, maxLines: maxLines, offset: offset })) : (React.createElement(PlainText, { text: agent, maxLines: maxLines, offset: offset, placeholder: "(agent transcript empty \u2014 pane may not be live)" }))),
+        React.createElement(Box, { marginTop: 1, flexDirection: "column", flexGrow: 1 }, !task ? (React.createElement(Text, { dimColor: true }, "nothing selected")) : loading ? (React.createElement(Text, { dimColor: true }, "loading\u2026")) : mode === "task" ? (React.createElement(TaskOverview, { task: task, targetBranch: targetBranch, maxLines: maxLines, offset: offset, width: width, overlaps: overlaps })) : mode === "diff" ? (React.createElement(DiffView, { diff: diff, maxLines: maxLines, offset: offset, width: contentWidth })) : mode === "files" ? (React.createElement(FilesView, { entries: files, targetBranch: targetBranch, maxLines: maxLines, offset: offset, width: contentWidth })) : mode === "log" ? (React.createElement(PlainText, { text: log, maxLines: maxLines, offset: offset })) : (React.createElement(PlainText, { text: agent, maxLines: maxLines, offset: offset, placeholder: "(agent transcript empty \u2014 pane may not be live)" }))),
         React.createElement(Box, null,
             React.createElement(Text, { dimColor: true },
                 "scroll ",
@@ -68,7 +68,7 @@ function TaskStatusStrip({ task, targetBranch, width, }) {
             " ",
             truncate(line.slice(label.length + 1), width - 10))));
 }
-function TaskOverview({ task, targetBranch, maxLines, offset, width, }) {
+function TaskOverview({ task, targetBranch, maxLines, offset, width, overlaps, }) {
     const rows = [
         [
             "Status",
@@ -100,6 +100,12 @@ function TaskOverview({ task, targetBranch, maxLines, offset, width, }) {
     const failureRows = failureDetailRows(task);
     if (failureRows.length > 0)
         rows.splice(2, 0, ...failureRows);
+    if (overlaps && overlaps.length > 0) {
+        rows.splice(2, 0, [
+            "⚠ Conflicts",
+            `File overlap with: ${overlaps.join(", ")} — apply in order or rebase first.`,
+        ]);
+    }
     const followUps = suggestedFollowUps(task);
     if (followUps[0]) {
         rows.push([

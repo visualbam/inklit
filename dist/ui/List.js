@@ -5,7 +5,7 @@ import { STATE_ICON, STATE_COLOR, LIFECYCLE_LABEL, LIFECYCLE_COLOR, formatStateL
 import { UI } from "./theme.js";
 import { ReviewBadges, reviewSummary } from "./review.js";
 import { truncate } from "./text.js";
-export function TaskList({ tasks, selectedSlug, totalTasks, filterQuery, density, width, height, }) {
+export function TaskList({ tasks, selectedSlug, totalTasks, filterQuery, density, width, height, overlaps, }) {
     if (tasks.length === 0) {
         return React.createElement(EmptyBoard, { filterQuery: filterQuery, totalTasks: totalTasks });
     }
@@ -17,7 +17,7 @@ export function TaskList({ tasks, selectedSlug, totalTasks, filterQuery, density
         density,
         height,
     });
-    return density === "compact" ? (React.createElement(CompactTaskList, { tasks: windowed.tasks, selectedSlug: selectedSlug, totalTasks: totalTasks, filterQuery: filterQuery, matchedTaskCount: tasks.length, hiddenAbove: windowed.hiddenAbove, hiddenBelow: windowed.hiddenBelow, width: width })) : (React.createElement(DetailedTaskList, { tasks: windowed.tasks, selectedSlug: selectedSlug, totalTasks: totalTasks, filterQuery: filterQuery, matchedTaskCount: tasks.length, hiddenAbove: windowed.hiddenAbove, hiddenBelow: windowed.hiddenBelow, width: width }));
+    return density === "compact" ? (React.createElement(CompactTaskList, { tasks: windowed.tasks, selectedSlug: selectedSlug, totalTasks: totalTasks, filterQuery: filterQuery, matchedTaskCount: tasks.length, hiddenAbove: windowed.hiddenAbove, hiddenBelow: windowed.hiddenBelow, width: width, overlaps: overlaps })) : (React.createElement(DetailedTaskList, { tasks: windowed.tasks, selectedSlug: selectedSlug, totalTasks: totalTasks, filterQuery: filterQuery, matchedTaskCount: tasks.length, hiddenAbove: windowed.hiddenAbove, hiddenBelow: windowed.hiddenBelow, width: width, overlaps: overlaps }));
 }
 export function taskListLineCount(tasks, totalTasks, filterQuery, density) {
     if (tasks.length === 0)
@@ -106,7 +106,7 @@ function taskListLineCountForSlice({ tasks, totalTasks, matchedTaskCount, filter
     const headerLines = density === "compact" ? 0 : 2;
     return headerLines + groupCount + itemLines + filterFooter + hiddenMarkers;
 }
-function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, }) {
+function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, overlaps, }) {
     // Reserve roughly: rail+icon + stage + pane + age + review + spacing.
     const reviewCol = 18;
     const fixed = 55 + reviewCol;
@@ -165,6 +165,7 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
                             React.createElement(ReviewBadges, { task: t, maxWidth: reviewCol }),
                             pad("", Math.max(0, reviewCol - reviewSummary(t).length))),
                         React.createElement(Text, null, " "),
+                        React.createElement(Text, { color: overlaps?.has(t.slug) ? "yellow" : undefined }, overlaps?.has(t.slug) ? "⚠ " : "  "),
                         React.createElement(Text, { bold: sel, dimColor: !sel }, pad(formatAge(t.ageSeconds), 5))))));
         }),
         hiddenBelow > 0 ? React.createElement(HiddenMarker, { count: hiddenBelow, direction: "below" }) : null,
@@ -176,7 +177,7 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
                 totalTasks,
                 " \u00B7 clear filter with /"))) : null));
 }
-function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, }) {
+function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, overlaps, }) {
     let currentGroup = null;
     const subjectWidth = Math.max(8, width - 28);
     return (React.createElement(Box, { flexDirection: "column" },
@@ -208,7 +209,8 @@ function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matched
                             "   ",
                             truncate(meta, 28),
                             " \u00B7 "),
-                        React.createElement(ReviewBadges, { task: t, maxWidth: Math.max(12, width - 38) })))));
+                        React.createElement(ReviewBadges, { task: t, maxWidth: Math.max(12, width - 38) }),
+                        overlaps?.has(t.slug) ? React.createElement(Text, { color: "yellow" }, " \u26A0") : null))));
         }),
         hiddenBelow > 0 ? React.createElement(HiddenMarker, { count: hiddenBelow, direction: "below" }) : null,
         filterQuery.trim() && matchedTaskCount < totalTasks ? (React.createElement(Box, { paddingX: 1 },

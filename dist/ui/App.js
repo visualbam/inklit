@@ -17,9 +17,14 @@ import { CommandPalette } from "./CommandPalette.js";
 import { agentTranscriptTail } from "./agentTranscript.js";
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
-import { listProject, gitDiff, gitFiles, gitLog, gitReviewStats, detectPermissionRequest, detectWaiting, mergeToMain, syncFromMain, removeWorktree, } from "../wt.js";
+import { AiFollowUpOverlay } from "./AiFollowUpOverlay.js";
+import { GoalDecomposePrompt } from "./GoalDecomposePrompt.js";
+import { listProject, gitDiff, gitFiles, gitLog, gitReviewStats, gitChangedFileNames, detectPermissionRequest, detectWaiting, mergeToMain, syncFromMain, removeWorktree, } from "../wt.js";
+import { computeOverlaps } from "../overlap.js";
+import { fetchAiFollowUps } from "../ai.js";
 import { inSession, dumpScreen, focusPaneByName, focusPaneId, focusOwnPane, closePaneByName, closePaneById, sendKeysToPaneId, sendKeysToSlug, panesSnapshot, } from "../zellij.js";
 import { spawnAgent, resumeAgent } from "../agent.js";
+import { extractClipboardImage } from "../clipboard.js";
 import { getAgent, loadAll, recordPane, clearPane, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, clearStaleApplyOperations, signalDir, } from "../state.js";
 import { clearTaskPreview } from "../preview.js";
 import { notify } from "../notify.js";
@@ -234,14 +239,21 @@ function reducer(s, a) {
             };
         case "mode/resuming":
             return { ...s, mode: "resuming" };
-        case "mode/list":
+        case "mode/list": {
+            // Delete any unattached clipboard temp file so we don't leak /tmp images.
+            if (s.pendingClipboardImage) {
+                void fsPromises.unlink(s.pendingClipboardImage).catch(() => { });
+            }
             return {
                 ...s,
                 mode: "list",
                 newTaskDescription: "",
                 pendingResumeSlug: null,
                 sendInputValue: "",
+                pendingClipboardImage: undefined,
+                pendingImagePath: undefined,
             };
+        }
         case "mode/sendInput":
             // Snap inspector to the live agent transcript so the user can see
             // exactly what they're typing into.
@@ -418,13 +430,35 @@ function reducer(s, a) {
             return { ...s, inspectorOffsets: map };
         }
         case "newTask/setDescription":
-            return { ...s, newTaskDescription: a.value };
+            return { ...s, newTaskDescription: a.value.replace(/[^\x20-\x7E-￿]/g, "") };
+        case "newTask/clipboardImage":
+            return { ...s, pendingClipboardImage: a.path };
+        case "newTask/attachImage":
+            return {
+                ...s,
+                pendingImagePath: s.pendingClipboardImage,
+                pendingClipboardImage: undefined,
+            };
+        case "newTask/clearImage":
+            return { ...s, pendingClipboardImage: undefined, pendingImagePath: undefined };
         case "flash":
             return { ...s, flash: a.message };
         case "error":
             return { ...s, error: a.message };
         case "chord/set":
             return { ...s, pendingChord: a.key };
+        case "overlaps/computed":
+            return { ...s, taskOverlaps: a.overlaps };
+        case "mode/aiFollowUpLoading":
+            return { ...s, mode: "aiFollowUpLoading", aiFollowUps: [], aiFollowUpSelectedIndex: 0 };
+        case "aiFollowUp/loaded":
+            return { ...s, mode: "aiFollowUpPicker", aiFollowUps: a.followUps, aiFollowUpSelectedIndex: 0 };
+        case "aiFollowUp/selectNext":
+            return { ...s, aiFollowUpSelectedIndex: Math.min(s.aiFollowUps.length - 1, s.aiFollowUpSelectedIndex + 1) };
+        case "aiFollowUp/selectPrev":
+            return { ...s, aiFollowUpSelectedIndex: Math.max(0, s.aiFollowUpSelectedIndex - 1) };
+        case "mode/goalDecompose":
+            return { ...s, mode: "goalDecompose" };
         default:
             return s;
     }
@@ -575,6 +609,7 @@ export function App({ mainBranch = "main" }) {
     const backgroundScanIndexRef = useRef(0);
     const screenCacheRef = useRef(new Map());
     const reviewStatsRef = useRef(new Map());
+    const readyFileSetsRef = useRef(new Map());
     const completedTasksRef = useRef(new Map());
     const reviewScanIndexRef = useRef(0);
     const densityTouchedRef = useRef(false);
@@ -1022,6 +1057,28 @@ export function App({ mainBranch = "main" }) {
                     lastProbeMs: Date.now(),
                 });
                 dispatch({ type: "task/reviewStats", slug: task.slug, stats });
+                // For ready tasks, also collect file names for overlap detection.
+                if (task.state === "ready") {
+                    const fileNames = await gitChangedFileNames(task.path, targetBranch);
+                    if (!cancelled) {
+                        readyFileSetsRef.current.set(task.slug, new Set(fileNames));
+                    }
+                }
+            }
+            // Recompute overlaps after each probe round for currently-ready tasks.
+            const allReadySlugs = new Set(latestTasksRef.current.filter((t) => t.state === "ready").map((t) => t.slug));
+            // Drop stale entries from tasks that are no longer ready.
+            for (const slug of [...readyFileSetsRef.current.keys()]) {
+                if (!allReadySlugs.has(slug))
+                    readyFileSetsRef.current.delete(slug);
+            }
+            if (readyFileSetsRef.current.size > 1) {
+                const overlaps = computeOverlaps(readyFileSetsRef.current);
+                if (!cancelled)
+                    dispatch({ type: "overlaps/computed", overlaps });
+            }
+            else if (!cancelled && latestTasksRef.current.every((t) => t.state !== "ready" || !readyFileSetsRef.current.has(t.slug))) {
+                dispatch({ type: "overlaps/computed", overlaps: new Map() });
             }
             if (!cancelled)
                 timer = setTimeout(tick, REVIEW_STATS_TICK_MS);
@@ -1109,6 +1166,19 @@ export function App({ mainBranch = "main" }) {
             cancelled = true;
         };
     }, [state.selectedSlug, state.inspectorMode, state.tasks, targetBranch]);
+    // Proactively check clipboard for an image when entering new-task mode.
+    useEffect(() => {
+        if (state.mode !== "newTaskDescription")
+            return;
+        let cancelled = false;
+        void extractClipboardImage().then((path) => {
+            if (!cancelled && path)
+                dispatch({ type: "newTask/clipboardImage", path });
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [state.mode]);
     // Flash auto-clear.
     useEffect(() => {
         if (!state.flash)
@@ -1128,17 +1198,20 @@ export function App({ mainBranch = "main" }) {
         if (state.mode === "newTaskDescription") {
             if (key.escape)
                 dispatch({ type: "mode/list" });
+            if (key.ctrl && input === "v" && state.pendingClipboardImage) {
+                dispatch({ type: "newTask/attachImage" });
+            }
             return;
         }
         if (state.mode === "newTaskAgent") {
             if (key.escape)
                 dispatch({ type: "mode/list" });
             if (input === "c")
-                void doSpawn(state.pendingDescription, "claude");
+                void doSpawn(state.pendingDescription, "claude", state.pendingImagePath);
             if (input === "x")
-                void doSpawn(state.pendingDescription, "codex");
+                void doSpawn(state.pendingDescription, "codex", state.pendingImagePath);
             if (input === "o")
-                void doSpawn(state.pendingDescription, "opencode");
+                void doSpawn(state.pendingDescription, "opencode", state.pendingImagePath);
             return;
         }
         if (state.mode === "spawning")
@@ -1204,6 +1277,38 @@ export function App({ mainBranch = "main" }) {
             if (input === "o" && state.pendingResumeSlug) {
                 void doResume(state.pendingResumeSlug, "opencode");
             }
+            return;
+        }
+        if (state.mode === "aiFollowUpLoading")
+            return;
+        if (state.mode === "aiFollowUpPicker") {
+            if (key.escape) {
+                dispatch({ type: "mode/list" });
+                return;
+            }
+            if (input === "j" || key.downArrow) {
+                dispatch({ type: "aiFollowUp/selectNext" });
+                return;
+            }
+            if (input === "k" || key.upArrow) {
+                dispatch({ type: "aiFollowUp/selectPrev" });
+                return;
+            }
+            if (key.return) {
+                const followUp = state.aiFollowUps[state.aiFollowUpSelectedIndex];
+                if (followUp) {
+                    dispatch({ type: "mode/newTaskAgent", description: followUp.prompt });
+                }
+                else {
+                    dispatch({ type: "mode/list" });
+                }
+                return;
+            }
+            return;
+        }
+        if (state.mode === "goalDecompose") {
+            // GoalDecomposePrompt manages its own input; this just blocks all
+            // other App keybinds from firing while the overlay is open.
             return;
         }
         if (state.mode === "confirmMerge") {
@@ -1408,8 +1513,19 @@ export function App({ mainBranch = "main" }) {
         }
         if (input === "s") {
             const slug = state.selectedSlug;
-            if (slug)
+            if (!slug)
+                return;
+            const task = state.tasks.find((t) => t.slug === slug);
+            if (task?.state === "merged" || lifecycleForTask(task ?? { state: "ready" }) === "done") {
+                void doFetchAiFollowUps(slug, task);
+            }
+            else {
                 void doSync(slug);
+            }
+            return;
+        }
+        if (input === "N") {
+            dispatch({ type: "mode/goalDecompose" });
             return;
         }
         if (input === "X") {
@@ -1539,6 +1655,13 @@ export function App({ mainBranch = "main" }) {
             });
             return;
         }
+        const conflicting = state.taskOverlaps.get(state.selectedSlug);
+        if (conflicting && conflicting.length > 0) {
+            dispatch({
+                type: "flash",
+                message: `⚠ ${state.selectedSlug} overlaps with ${conflicting.join(", ")} — confirm merge below.`,
+            });
+        }
         dispatch({ type: "mode/confirmMerge" });
     }
     function requestKillSelected() {
@@ -1585,6 +1708,8 @@ export function App({ mainBranch = "main" }) {
     function runPaletteCommand(input) {
         if (input === "n")
             requestNewTask();
+        else if (input === "N")
+            dispatch({ type: "mode/goalDecompose" });
         else if (input === "r") {
             dispatch({ type: "mode/list" });
             refreshBoard();
@@ -1684,7 +1809,7 @@ export function App({ mainBranch = "main" }) {
             await focusOwnPane().catch(() => false);
         return closed;
     }
-    async function doSpawn(description, agent) {
+    async function doSpawn(description, agent, imagePath) {
         dispatch({ type: "mode/spawning" });
         try {
             const res = await spawnAgent({
@@ -1692,6 +1817,7 @@ export function App({ mainBranch = "main" }) {
                 agent,
                 base: targetBranch === "main" ? undefined : targetBranch,
                 anchorPaneId: pickStackAnchor(),
+                imagePath: agent === "claude" ? imagePath : undefined,
             });
             dispatch({ type: "mode/list" });
             dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
@@ -1765,6 +1891,8 @@ export function App({ mainBranch = "main" }) {
                     : `Applied ${slug} → ${targetBranch}`,
             });
             refreshProjectRef.current();
+            // Fetch AI follow-up suggestions in the background.
+            void doFetchAiFollowUps(slug, mergedTask);
         }
         catch (err) {
             if (controller.signal.aborted) {
@@ -1788,6 +1916,18 @@ export function App({ mainBranch = "main" }) {
                 applyAbortRef.current = null;
                 applySlugRef.current = null;
             }
+        }
+    }
+    async function doFetchAiFollowUps(_slug, task) {
+        dispatch({ type: "mode/aiFollowUpLoading" });
+        try {
+            const diff = await gitDiff(task.path, targetBranch, 8000);
+            const followUps = await fetchAiFollowUps(task, diff);
+            dispatch({ type: "aiFollowUp/loaded", followUps });
+        }
+        catch {
+            // Silently return to list on AI errors — not critical.
+            dispatch({ type: "mode/list" });
         }
     }
     async function doSync(slug) {
@@ -2082,7 +2222,7 @@ export function App({ mainBranch = "main" }) {
     return (React.createElement(Box, { flexDirection: "column", height: rows },
         React.createElement(MainVersionBar, { mainVersion: state.mainVersion, targetBranch: targetBranch, tasks: state.tasks, visibleTaskCount: visibleTasks.length, filterQuery: state.filterQuery, width: cols - 2 }),
         React.createElement(Box, { flexDirection: "column", height: listHeight },
-            React.createElement(TaskList, { tasks: visibleTasks, selectedSlug: state.selectedSlug, totalTasks: state.tasks.length, filterQuery: state.filterQuery, density: state.listDensity, width: cols - 2, height: listHeight })),
+            React.createElement(TaskList, { tasks: visibleTasks, selectedSlug: state.selectedSlug, totalTasks: state.tasks.length, filterQuery: state.filterQuery, density: state.listDensity, width: cols - 2, height: listHeight, overlaps: state.taskOverlaps })),
         React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "newTaskDescription" ? (React.createElement(DescriptionPrompt, { value: state.newTaskDescription, onChange: (v) => dispatch({ type: "newTask/setDescription", value: v }), onSubmit: (v) => {
                 const trimmed = v.trim();
                 if (!trimmed) {
@@ -2090,10 +2230,28 @@ export function App({ mainBranch = "main" }) {
                     return;
                 }
                 dispatch({ type: "mode/newTaskAgent", description: trimmed });
-            }, onCancel: () => dispatch({ type: "mode/list" }) })) : state.mode === "newTaskAgent" ? (React.createElement(AgentPicker, { label: state.pendingDescription, intent: "spawn" })) : state.mode === "resumeAgentPicker" ? (React.createElement(AgentPicker, { label: state.pendingResumeSlug ?? "(unknown)", intent: "resume" })) : state.mode === "spawning" ? (React.createElement(Box, { paddingX: 1 },
+            }, onCancel: () => dispatch({ type: "mode/list" }), hasClipboardImage: !!state.pendingClipboardImage, imageAttached: !!state.pendingImagePath })) : state.mode === "newTaskAgent" ? (React.createElement(AgentPicker, { label: state.pendingDescription, intent: "spawn" })) : state.mode === "aiFollowUpLoading" ? (React.createElement(Box, { paddingX: 1 },
+            React.createElement(Text, { color: "yellow" }, "Fetching AI follow-up suggestions\u2026"))) : state.mode === "aiFollowUpPicker" ? (React.createElement(AiFollowUpOverlay, { followUps: state.aiFollowUps, selectedIndex: state.aiFollowUpSelectedIndex, taskSlug: state.selectedSlug ?? "", width: cols - 6 })) : state.mode === "goalDecompose" ? (React.createElement(GoalDecomposePrompt, { onSpawnAll: (subtasks) => {
+                dispatch({ type: "mode/spawning" });
+                (async () => {
+                    for (const desc of subtasks) {
+                        await spawnAgent({
+                            description: desc,
+                            agent: "claude",
+                            base: targetBranch === "main" ? undefined : targetBranch,
+                            anchorPaneId: pickStackAnchor(),
+                        }).catch(() => { });
+                    }
+                    dispatch({ type: "mode/list" });
+                    dispatch({
+                        type: "flash",
+                        message: `Spawned ${subtasks.length} parallel task${subtasks.length === 1 ? "" : "s"}.`,
+                    });
+                })();
+            }, onCancel: () => dispatch({ type: "mode/list" }), width: cols - 6 })) : state.mode === "resumeAgentPicker" ? (React.createElement(AgentPicker, { label: state.pendingResumeSlug ?? "(unknown)", intent: "resume" })) : state.mode === "spawning" ? (React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { color: "yellow" }, "spawning\u2026"))) : state.mode === "resuming" ? (React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { color: "yellow" }, "resuming\u2026"))) : state.mode === "closingAll" ? (React.createElement(Box, { paddingX: 1 },
-            React.createElement(Text, { color: "yellow" }, "closing live agent panes\u2026"))) : state.mode === "commandPalette" ? (React.createElement(CommandPalette, { selectedTask: selectedTask, density: state.listDensity, targetBranch: targetBranch, showArchived: state.showArchived, inSession: inSess, height: inspectorHeight, width: cols - 4 })) : (React.createElement(Inspector, { task: selectedTask, mode: state.inspectorMode, targetBranch: targetBranch, diff: content.diff, log: content.log, agent: content.agent, files: content.files, loading: state.inspectorLoading, height: inspectorHeight, width: cols - 4, offset: offsetForView }))),
+            React.createElement(Text, { color: "yellow" }, "closing live agent panes\u2026"))) : state.mode === "commandPalette" ? (React.createElement(CommandPalette, { selectedTask: selectedTask, density: state.listDensity, targetBranch: targetBranch, showArchived: state.showArchived, inSession: inSess, height: inspectorHeight, width: cols - 4 })) : (React.createElement(Inspector, { task: selectedTask, mode: state.inspectorMode, targetBranch: targetBranch, diff: content.diff, log: content.log, agent: content.agent, files: content.files, loading: state.inspectorLoading, height: inspectorHeight, width: cols - 4, offset: offsetForView, overlaps: selectedTask ? state.taskOverlaps.get(selectedTask.slug) : undefined }))),
         bottomStripHeight > 0 ? (React.createElement(Box, { height: bottomStripHeight, flexDirection: "column" }, showConfirm ? (React.createElement(ConfirmPrompt, { action: state.mode === "confirmKill" || state.mode === "killing"
                 ? "kill"
                 : state.mode === "confirmCloseAll" ||
