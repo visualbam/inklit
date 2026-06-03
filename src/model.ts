@@ -171,8 +171,8 @@ export interface AppState {
   sendInputValue: string;
   /** Temp file path of a clipboard image detected when entering new-task mode. Not yet attached. */
   pendingClipboardImage?: string;
-  /** Temp file path of a clipboard image the user has explicitly attached (ctrl+v). */
-  pendingImagePath?: string;
+  /** Temp file paths of clipboard images the user has attached (ctrl+v). Index 0 = [image #1]. */
+  pendingAttachedImages?: string[];
   /**
    * Inspector scroll offset, keyed by `${slug}:${mode}`. Value is the number of
    * lines hidden above the viewport. Sentinel `-1` means "auto-tail to the

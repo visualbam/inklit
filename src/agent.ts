@@ -43,17 +43,19 @@ export async function spawnAgent(opts: {
   cwd?: string;
   /** Optional pane id of an existing agent to stack onto. */
   anchorPaneId?: string | null;
-  /** Path to an image file to include as context in the initial prompt (claude only). */
-  imagePath?: string;
+  /** Paths to image files to include as context in the initial prompt (claude only). */
+  imagePaths?: string[];
 }): Promise<SpawnResult> {
   const slug = opts.branch ?? slugify(opts.description);
   const mainPath = opts.cwd ?? process.cwd();
   const tasksDir = join(mainPath, ".inklit", "tasks");
   await fs.mkdir(tasksDir, { recursive: true }).catch(() => {});
 
-  const baseDescription = opts.imagePath
-    ? `${opts.description}\n\nImage context: ${opts.imagePath}`
-    : opts.description;
+  const imageSection = opts.imagePaths?.length
+    ? "\n\nImage context:\n" +
+      opts.imagePaths.map((p, i) => `[image #${i + 1}]: ${p}`).join("\n")
+    : "";
+  const baseDescription = opts.description + imageSection;
   const effectiveDescription = baseDescription + INKLIT_INSTRUCTION(tasksDir, slug);
 
   let switchArgs: string[];

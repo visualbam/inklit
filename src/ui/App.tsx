@@ -423,7 +423,7 @@ function reducer(s: RenderState, a: Action): RenderState {
         pendingResumeSlug: null,
         sendInputValue: "",
         pendingClipboardImage: undefined,
-        pendingImagePath: undefined,
+        pendingAttachedImages: undefined,
       };
     }
     case "mode/sendInput":
@@ -644,11 +644,14 @@ function reducer(s: RenderState, a: Action): RenderState {
     case "newTask/attachImage":
       return {
         ...s,
-        pendingImagePath: s.pendingClipboardImage,
+        pendingAttachedImages: [
+          ...(s.pendingAttachedImages ?? []),
+          s.pendingClipboardImage!,
+        ],
         pendingClipboardImage: undefined,
       };
     case "newTask/clearImage":
-      return { ...s, pendingClipboardImage: undefined, pendingImagePath: undefined };
+      return { ...s, pendingClipboardImage: undefined, pendingAttachedImages: undefined };
     case "flash":
       return { ...s, flash: a.message };
     case "error":
@@ -1449,16 +1452,39 @@ export function App({ mainBranch = "main" }: AppProps) {
       // Prompts handle their own input.
       if (state.mode === "newTaskDescription") {
         if (key.escape) dispatch({ type: "mode/list" });
-        if (key.ctrl && input === "v" && state.pendingClipboardImage) {
-          dispatch({ type: "newTask/attachImage" });
+        if (key.ctrl && input === "v") {
+          const n = (state.pendingAttachedImages?.length ?? 0) + 1;
+          const snapshot = state.newTaskDescription;
+          const finishAttach = () => {
+            dispatch({ type: "newTask/attachImage" });
+            setTimeout(() => {
+              dispatch({ type: "newTask/setDescription", value: snapshot + ` [image #${n}]` });
+            }, 0);
+          };
+          if (state.pendingClipboardImage) {
+            finishAttach();
+          } else {
+            void extractClipboardImage().then((path) => {
+              if (path) {
+                dispatch({ type: "newTask/clipboardImage", path });
+                finishAttach();
+              } else {
+                // No image in clipboard — swallow the 'v' TextInput inserted
+                setTimeout(() => {
+                  dispatch({ type: "newTask/setDescription", value: snapshot });
+                }, 0);
+              }
+            });
+          }
+          return;
         }
         return;
       }
       if (state.mode === "newTaskAgent") {
         if (key.escape) dispatch({ type: "mode/list" });
-        if (input === "c") void doSpawn(state.pendingDescription, "claude", state.pendingImagePath);
-        if (input === "x") void doSpawn(state.pendingDescription, "codex", state.pendingImagePath);
-        if (input === "o") void doSpawn(state.pendingDescription, "opencode", state.pendingImagePath);
+        if (input === "c") void doSpawn(state.pendingDescription, "claude", state.pendingAttachedImages);
+        if (input === "x") void doSpawn(state.pendingDescription, "codex", state.pendingAttachedImages);
+        if (input === "o") void doSpawn(state.pendingDescription, "opencode", state.pendingAttachedImages);
         return;
       }
       if (state.mode === "spawning") return;
@@ -2046,7 +2072,7 @@ export function App({ mainBranch = "main" }: AppProps) {
   async function doSpawn(
     description: string,
     agent: AgentKind,
-    imagePath?: string,
+    imagePaths?: string[],
   ) {
     dispatch({ type: "mode/spawning" });
     try {
@@ -2055,7 +2081,7 @@ export function App({ mainBranch = "main" }: AppProps) {
         agent,
         base: targetBranch === "main" ? undefined : targetBranch,
         anchorPaneId: pickStackAnchor(),
-        imagePath: agent === "claude" ? imagePath : undefined,
+        imagePaths: agent === "claude" ? imagePaths : undefined,
       });
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
@@ -2533,7 +2559,6 @@ export function App({ mainBranch = "main" }: AppProps) {
             }}
             onCancel={() => dispatch({ type: "mode/list" })}
             hasClipboardImage={!!state.pendingClipboardImage}
-            imageAttached={!!state.pendingImagePath}
           />
         ) : state.mode === "newTaskAgent" ? (
           <AgentPicker label={state.pendingDescription} intent="spawn" />
