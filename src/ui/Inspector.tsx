@@ -30,6 +30,8 @@ interface Props {
   width: number;
   /** Lines hidden above the viewport (already clamped by App). */
   offset: number;
+  /** Slugs that share changed files with this task's ready changes. */
+  overlaps?: string[];
 }
 
 export function Inspector({
@@ -44,6 +46,7 @@ export function Inspector({
   height,
   width,
   offset,
+  overlaps,
 }: Props) {
   // Reserve header, status strip, mode tabs, footer, and spacing inside the box.
   const maxLines = Math.max(3, height - 6);
@@ -86,6 +89,7 @@ export function Inspector({
             maxLines={maxLines}
             offset={offset}
             width={width}
+            overlaps={overlaps}
           />
         ) : mode === "diff" ? (
           <DiffView
@@ -183,12 +187,14 @@ function TaskOverview({
   maxLines,
   offset,
   width,
+  overlaps,
 }: {
   task: Task;
   targetBranch: string;
   maxLines: number;
   offset: number;
   width: number;
+  overlaps?: string[];
 }) {
   const rows: [string, string][] = [
     [
@@ -220,6 +226,12 @@ function TaskOverview({
   ];
   const failureRows = failureDetailRows(task);
   if (failureRows.length > 0) rows.splice(2, 0, ...failureRows);
+  if (overlaps && overlaps.length > 0) {
+    rows.splice(2, 0, [
+      "⚠ Conflicts",
+      `File overlap with: ${overlaps.join(", ")} — apply in order or rebase first.`,
+    ]);
+  }
   const followUps = suggestedFollowUps(task);
   if (followUps[0]) {
     rows.push([

@@ -134,6 +134,7 @@ export interface AppState {
     | "list"
     | "newTaskDescription"
     | "newTaskAgent"
+    | "contextPicker"
     | "spawning"
     | "confirmMerge"
     | "confirmKill"
@@ -148,7 +149,10 @@ export interface AppState {
     | "filter"
     | "commandPalette"
     | "help"
-    | "error";
+    | "error"
+    | "aiFollowUpLoading"
+    | "aiFollowUpPicker"
+    | "goalDecompose";
   inspectorMode: InspectorMode;
   /** Dense table vs stacked task-card board. */
   listDensity: TaskListDensity;
@@ -177,6 +181,20 @@ export interface AppState {
    * lines come in. Missing key falls back to the per-mode default in App.
    */
   inspectorOffsets: Map<string, number>;
+  /** Maps task slug to list of slugs whose ready changes overlap with it. */
+  taskOverlaps: Map<string, string[]>;
+  /** Agent kind selected during new-task flow, held across context picker step. */
+  pendingAgentKind: AgentKind | null;
+  /** AI-suggested follow-up tasks after a merge. */
+  aiFollowUps: SuggestedFollowUp[];
+  /** Selected index in the aiFollowUpPicker overlay. */
+  aiFollowUpSelectedIndex: number;
+}
+
+export interface SuggestedFollowUp {
+  title: string;
+  detail: string;
+  prompt: string;
 }
 
 export const initialState: AppState = {
@@ -196,6 +214,10 @@ export const initialState: AppState = {
   sendInputValue: "",
   filterQuery: "",
   inspectorOffsets: new Map(),
+  taskOverlaps: new Map(),
+  pendingAgentKind: null,
+  aiFollowUps: [],
+  aiFollowUpSelectedIndex: 0,
 };
 
 export function lifecycleForState(state: TaskState): TaskLifecycle {

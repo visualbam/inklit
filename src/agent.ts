@@ -32,6 +32,8 @@ export async function spawnAgent(opts: {
   anchorPaneId?: string | null;
   /** Path to an image file to include as context in the initial prompt (claude only). */
   imagePath?: string;
+  /** Diff summary from a prior task to write as CONTEXT.md in the new worktree. */
+  contextSummary?: string;
 }): Promise<SpawnResult> {
   const slug = opts.branch ?? slugify(opts.description);
 
@@ -65,9 +67,12 @@ export async function spawnAgent(opts: {
   // hundreds of ms because zellij + wt + agent boot).
   await recordSpawn(slug, opts.agent, paneId).catch(() => {});
   void refreshTaskPreview(slug, opts.cwd).catch(() => {});
+  const mainPath = opts.cwd ?? process.cwd();
   if (opts.agent === "claude") {
-    const mainPath = opts.cwd ?? process.cwd();
     void scheduleStopHook(slug, mainPath + "." + slug);
+  }
+  if (opts.contextSummary) {
+    void scheduleContextFile(slug, mainPath + "." + slug, opts.contextSummary);
   }
   return { slug, paneId };
 }
@@ -177,6 +182,34 @@ async function scheduleStopHook(slug: string, worktreePath: string): Promise<voi
     return; // worktree never appeared, skip
   }
   await injectStopHook(slug, worktreePath);
+}
+
+/**
+ * Wait for the worktree directory to appear, then write CONTEXT.md so the
+ * agent starts with knowledge of what the prior task changed.
+ */
+async function scheduleContextFile(
+  _slug: string,
+  worktreePath: string,
+  contextSummary: string
+): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      await fs.access(worktreePath);
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+  try {
+    await fs.access(worktreePath);
+  } catch {
+    return;
+  }
+  const contextPath = join(worktreePath, "CONTEXT.md");
+  const content = `# Context from prior task\n\nThe following diff was applied to the main branch before this task was created. Use it to understand what changed recently.\n\n\`\`\`diff\n${contextSummary}\n\`\`\`\n`;
+  await fs.writeFile(contextPath, content, "utf-8").catch(() => {});
 }
 
 async function injectStopHook(slug: string, worktreePath: string): Promise<void> {

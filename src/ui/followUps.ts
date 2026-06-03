@@ -1,10 +1,6 @@
-import type { Task } from "../model.js";
+import type { Task, SuggestedFollowUp } from "../model.js";
 
-export interface SuggestedFollowUp {
-  title: string;
-  detail: string;
-  prompt: string;
-}
+export type { SuggestedFollowUp };
 
 export function suggestedFollowUps(task: Task | null): SuggestedFollowUp[] {
   if (!task) return [];

@@ -566,6 +566,47 @@ function countKeys(path: string): string[] {
   return keys;
 }
 
+/**
+ * Lightweight list of changed file paths for a worktree — tracked diffs +
+ * untracked files. Used for overlap detection; cheaper than gitFiles() since
+ * it skips numstat.
+ */
+export async function gitChangedFileNames(
+  worktreePath: string,
+  target = "main"
+): Promise<string[]> {
+  try {
+    const base = await gitDiffBase(worktreePath, target);
+    const tracked = await gitLines(
+      worktreePath,
+      ["diff", "--name-only", "--find-renames", base],
+      2000
+    );
+    const untracked = await gitUntrackedFiles(worktreePath);
+    return [...new Set([...tracked, ...untracked])];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * List all tracked files in the current git repo (git ls-files --cached).
+ * Used to give Claude context about the repo structure for goal decomposition.
+ */
+export async function listRepoFiles(cwd?: string): Promise<string[]> {
+  try {
+    const effectiveCwd = cwd ?? process.cwd();
+    const { stdout } = await execa(
+      "git",
+      ["-C", effectiveCwd, "ls-files", "--cached"],
+      { reject: false, stripFinalNewline: true, timeout: 5000 }
+    );
+    return stdout ? stdout.split("\n").filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Commit log for the branch ahead of `target`. */
 export async function gitLog(
   worktreePath: string,

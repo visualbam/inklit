@@ -22,6 +22,8 @@ interface Props {
   density: TaskListDensity;
   width: number;
   height: number;
+  /** Maps task slug to list of conflicting slugs (file overlap with another ready task). */
+  overlaps?: Map<string, string[]>;
 }
 
 export function TaskList({
@@ -32,6 +34,7 @@ export function TaskList({
   density,
   width,
   height,
+  overlaps,
 }: Props) {
   if (tasks.length === 0) {
     return <EmptyBoard filterQuery={filterQuery} totalTasks={totalTasks} />;
@@ -56,6 +59,7 @@ export function TaskList({
       hiddenAbove={windowed.hiddenAbove}
       hiddenBelow={windowed.hiddenBelow}
       width={width}
+      overlaps={overlaps}
     />
   ) : (
     <DetailedTaskList
@@ -67,6 +71,7 @@ export function TaskList({
       hiddenAbove={windowed.hiddenAbove}
       hiddenBelow={windowed.hiddenBelow}
       width={width}
+      overlaps={overlaps}
     />
   );
 }
@@ -222,6 +227,7 @@ function DetailedTaskList({
   hiddenAbove,
   hiddenBelow,
   width,
+  overlaps,
 }: Omit<Props, "density" | "height" | "tasks"> & {
   tasks: Task[];
   matchedTaskCount: number;
@@ -293,6 +299,9 @@ function DetailedTaskList({
                   {pad("", Math.max(0, reviewCol - reviewSummary(t).length))}
                 </Text>
                 <Text> </Text>
+                <Text color={overlaps?.has(t.slug) ? "yellow" : undefined}>
+                  {overlaps?.has(t.slug) ? "⚠ " : "  "}
+                </Text>
                 <Text bold={sel} dimColor={!sel}>
                   {pad(formatAge(t.ageSeconds), 5)}
                 </Text>
@@ -322,6 +331,7 @@ function CompactTaskList({
   hiddenAbove,
   hiddenBelow,
   width,
+  overlaps,
 }: Omit<Props, "density" | "height" | "tasks"> & {
   tasks: Task[];
   matchedTaskCount: number;
@@ -361,6 +371,7 @@ function CompactTaskList({
                 <Text color={sel ? UI.accent : UI.subtle}> </Text>
                 <Text dimColor>   {truncate(meta, 28)} · </Text>
                 <ReviewBadges task={t} maxWidth={Math.max(12, width - 38)} />
+                {overlaps?.has(t.slug) ? <Text color="yellow"> ⚠</Text> : null}
               </Text>
             </Box>
           </React.Fragment>

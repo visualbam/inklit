@@ -21,12 +21,16 @@ import { CommandPalette } from "./CommandPalette.js";
 import { agentTranscriptTail } from "./agentTranscript.js";
 import { UI } from "./theme.js";
 import { suggestedFollowUps } from "./followUps.js";
+import { ContextPickerPrompt } from "./ContextPickerPrompt.js";
+import { AiFollowUpOverlay } from "./AiFollowUpOverlay.js";
+import { GoalDecomposePrompt } from "./GoalDecomposePrompt.js";
 import {
   listProject,
   gitDiff,
   gitFiles,
   gitLog,
   gitReviewStats,
+  gitChangedFileNames,
   detectPermissionRequest,
   detectWaiting,
   mergeToMain,
@@ -34,6 +38,8 @@ import {
   removeWorktree,
   type StatusEntry,
 } from "../wt.js";
+import { computeOverlaps } from "../overlap.js";
+import { fetchAiFollowUps } from "../ai.js";
 import {
   inSession,
   dumpScreen,
@@ -72,6 +78,7 @@ import type {
   InspectorMode,
   MainVersion,
   ReviewStats,
+  SuggestedFollowUp,
   Task,
   TaskFailure,
   TaskLifecycle,
@@ -143,7 +150,15 @@ type Action =
   | { type: "task/lifecycle"; slug: string; lifecycle: TaskLifecycle | undefined; lifecycleAt?: number }
   | { type: "flash"; message: string | null }
   | { type: "error"; message: string | null }
-  | { type: "chord/set"; key: string | null };
+  | { type: "chord/set"; key: string | null }
+  | { type: "overlaps/computed"; overlaps: Map<string, string[]> }
+  | { type: "mode/contextPicker"; agentKind: AgentKind }
+  | { type: "contextPicker/selectIndex"; index: number }
+  | { type: "mode/aiFollowUpLoading" }
+  | { type: "aiFollowUp/loaded"; followUps: SuggestedFollowUp[] }
+  | { type: "aiFollowUp/selectNext" }
+  | { type: "aiFollowUp/selectPrev" }
+  | { type: "mode/goalDecompose" };
 
 interface RenderState extends AppState {
   /** Per-slug per-mode cache. */
@@ -151,6 +166,8 @@ interface RenderState extends AppState {
   inspectorLoading: boolean;
   /** Sampled pane tails keyed by slug; retained for backward-compatible reducer flow. */
   agentTails: Map<string, string>;
+  /** Index into tasks[] for the context picker. */
+  contextPickerIndex: number;
 }
 
 const initial: RenderState = {
@@ -158,6 +175,7 @@ const initial: RenderState = {
   content: new Map(),
   inspectorLoading: false,
   agentTails: new Map(),
+  contextPickerIndex: 0,
 };
 
 function getContent(s: RenderState, slug: string | null): ModeContent {
@@ -643,6 +661,22 @@ function reducer(s: RenderState, a: Action): RenderState {
       return { ...s, error: a.message };
     case "chord/set":
       return { ...s, pendingChord: a.key };
+    case "overlaps/computed":
+      return { ...s, taskOverlaps: a.overlaps };
+    case "mode/contextPicker":
+      return { ...s, mode: "contextPicker", pendingAgentKind: a.agentKind, contextPickerIndex: 0 };
+    case "contextPicker/selectIndex":
+      return { ...s, contextPickerIndex: a.index };
+    case "mode/aiFollowUpLoading":
+      return { ...s, mode: "aiFollowUpLoading", aiFollowUps: [], aiFollowUpSelectedIndex: 0 };
+    case "aiFollowUp/loaded":
+      return { ...s, mode: "aiFollowUpPicker", aiFollowUps: a.followUps, aiFollowUpSelectedIndex: 0 };
+    case "aiFollowUp/selectNext":
+      return { ...s, aiFollowUpSelectedIndex: Math.min(s.aiFollowUps.length - 1, s.aiFollowUpSelectedIndex + 1) };
+    case "aiFollowUp/selectPrev":
+      return { ...s, aiFollowUpSelectedIndex: Math.max(0, s.aiFollowUpSelectedIndex - 1) };
+    case "mode/goalDecompose":
+      return { ...s, mode: "goalDecompose" };
     default:
       return s;
   }
@@ -836,6 +870,7 @@ export function App({ mainBranch = "main" }: AppProps) {
   const backgroundScanIndexRef = useRef(0);
   const screenCacheRef = useRef<Map<string, ScreenCacheEntry>>(new Map());
   const reviewStatsRef = useRef<Map<string, ReviewStatsCacheEntry>>(new Map());
+  const readyFileSetsRef = useRef<Map<string, Set<string>>>(new Map());
   const completedTasksRef = useRef<Map<string, CompletedTaskEntry>>(new Map());
   const reviewScanIndexRef = useRef(0);
   const densityTouchedRef = useRef(false);
@@ -1289,6 +1324,28 @@ export function App({ mainBranch = "main" }: AppProps) {
           lastProbeMs: Date.now(),
         });
         dispatch({ type: "task/reviewStats", slug: task.slug, stats });
+        // For ready tasks, also collect file names for overlap detection.
+        if (task.state === "ready") {
+          const fileNames = await gitChangedFileNames(task.path, targetBranch);
+          if (!cancelled) {
+            readyFileSetsRef.current.set(task.slug, new Set(fileNames));
+          }
+        }
+      }
+
+      // Recompute overlaps after each probe round for currently-ready tasks.
+      const allReadySlugs = new Set(
+        latestTasksRef.current.filter((t) => t.state === "ready").map((t) => t.slug)
+      );
+      // Drop stale entries from tasks that are no longer ready.
+      for (const slug of [...readyFileSetsRef.current.keys()]) {
+        if (!allReadySlugs.has(slug)) readyFileSetsRef.current.delete(slug);
+      }
+      if (readyFileSetsRef.current.size > 1) {
+        const overlaps = computeOverlaps(readyFileSetsRef.current);
+        if (!cancelled) dispatch({ type: "overlaps/computed", overlaps });
+      } else if (!cancelled && latestTasksRef.current.every((t) => t.state !== "ready" || !readyFileSetsRef.current.has(t.slug))) {
+        dispatch({ type: "overlaps/computed", overlaps: new Map() });
       }
 
       if (!cancelled) timer = setTimeout(tick, REVIEW_STATS_TICK_MS);
@@ -1409,9 +1466,53 @@ export function App({ mainBranch = "main" }: AppProps) {
       }
       if (state.mode === "newTaskAgent") {
         if (key.escape) dispatch({ type: "mode/list" });
-        if (input === "c") void doSpawn(state.pendingDescription, "claude", state.pendingImagePath);
-        if (input === "x") void doSpawn(state.pendingDescription, "codex");
-        if (input === "o") void doSpawn(state.pendingDescription, "opencode");
+        if (input === "c") dispatch({ type: "mode/contextPicker", agentKind: "claude" });
+        if (input === "x") dispatch({ type: "mode/contextPicker", agentKind: "codex" });
+        if (input === "o") dispatch({ type: "mode/contextPicker", agentKind: "opencode" });
+        return;
+      }
+      if (state.mode === "contextPicker") {
+        if (key.escape || input === "s") {
+          // Skip context — spawn without it.
+          void doSpawn(
+            state.pendingDescription,
+            state.pendingAgentKind ?? "claude",
+            state.pendingImagePath
+          );
+          return;
+        }
+        if (input === "j" || key.downArrow) {
+          const eligible = state.tasks.filter((t) => {
+            const lc = lifecycleForTask(t);
+            return lc === "done" || lc === "ready" || lc === "failed";
+          });
+          dispatch({
+            type: "contextPicker/selectIndex",
+            index: Math.min(eligible.length - 1, state.contextPickerIndex + 1),
+          });
+          return;
+        }
+        if (input === "k" || key.upArrow) {
+          dispatch({
+            type: "contextPicker/selectIndex",
+            index: Math.max(0, state.contextPickerIndex - 1),
+          });
+          return;
+        }
+        if (key.return) {
+          const eligible = state.tasks.filter((t) => {
+            const lc = lifecycleForTask(t);
+            return lc === "done" || lc === "ready" || lc === "failed";
+          });
+          const selected = eligible[state.contextPickerIndex];
+          void doSpawn(
+            state.pendingDescription,
+            state.pendingAgentKind ?? "claude",
+            state.pendingImagePath,
+            selected?.slug
+          );
+          return;
+        }
         return;
       }
       if (state.mode === "spawning") return;
@@ -1476,6 +1577,37 @@ export function App({ mainBranch = "main" }: AppProps) {
         if (input === "o" && state.pendingResumeSlug) {
           void doResume(state.pendingResumeSlug, "opencode");
         }
+        return;
+      }
+
+      if (state.mode === "aiFollowUpLoading") return;
+      if (state.mode === "aiFollowUpPicker") {
+        if (key.escape) {
+          dispatch({ type: "mode/list" });
+          return;
+        }
+        if (input === "j" || key.downArrow) {
+          dispatch({ type: "aiFollowUp/selectNext" });
+          return;
+        }
+        if (input === "k" || key.upArrow) {
+          dispatch({ type: "aiFollowUp/selectPrev" });
+          return;
+        }
+        if (key.return) {
+          const followUp = state.aiFollowUps[state.aiFollowUpSelectedIndex];
+          if (followUp) {
+            dispatch({ type: "mode/newTaskAgent", description: followUp.prompt });
+          } else {
+            dispatch({ type: "mode/list" });
+          }
+          return;
+        }
+        return;
+      }
+      if (state.mode === "goalDecompose") {
+        // GoalDecomposePrompt manages its own input; this just blocks all
+        // other App keybinds from firing while the overlay is open.
         return;
       }
 
@@ -1683,7 +1815,17 @@ export function App({ mainBranch = "main" }: AppProps) {
       }
       if (input === "s") {
         const slug = state.selectedSlug;
-        if (slug) void doSync(slug);
+        if (!slug) return;
+        const task = state.tasks.find((t) => t.slug === slug);
+        if (task?.state === "merged" || lifecycleForTask(task ?? { state: "ready" }) === "done") {
+          void doFetchAiFollowUps(slug, task!);
+        } else {
+          void doSync(slug);
+        }
+        return;
+      }
+      if (input === "N") {
+        dispatch({ type: "mode/goalDecompose" });
         return;
       }
       if (input === "X") {
@@ -1825,6 +1967,13 @@ export function App({ mainBranch = "main" }: AppProps) {
       });
       return;
     }
+    const conflicting = state.taskOverlaps.get(state.selectedSlug);
+    if (conflicting && conflicting.length > 0) {
+      dispatch({
+        type: "flash",
+        message: `⚠ ${state.selectedSlug} overlaps with ${conflicting.join(", ")} — confirm merge below.`,
+      });
+    }
     dispatch({ type: "mode/confirmMerge" });
   }
 
@@ -1871,6 +2020,7 @@ export function App({ mainBranch = "main" }: AppProps) {
 
   function runPaletteCommand(input: string): boolean {
     if (input === "n") requestNewTask();
+    else if (input === "N") dispatch({ type: "mode/goalDecompose" });
     else if (input === "r") {
       dispatch({ type: "mode/list" });
       refreshBoard();
@@ -1947,15 +2097,28 @@ export function App({ mainBranch = "main" }: AppProps) {
     return closed;
   }
 
-  async function doSpawn(description: string, agent: AgentKind, imagePath?: string) {
+  async function doSpawn(
+    description: string,
+    agent: AgentKind,
+    imagePath?: string,
+    contextSourceSlug?: string
+  ) {
     dispatch({ type: "mode/spawning" });
     try {
+      let contextSummary: string | undefined;
+      if (contextSourceSlug) {
+        const sourceTask = state.tasks.find((t) => t.slug === contextSourceSlug);
+        if (sourceTask) {
+          contextSummary = await gitDiff(sourceTask.path, targetBranch, 8000).catch(() => undefined);
+        }
+      }
       const res = await spawnAgent({
         description,
         agent,
         base: targetBranch === "main" ? undefined : targetBranch,
         anchorPaneId: pickStackAnchor(),
         imagePath: agent === "claude" ? imagePath : undefined,
+        contextSummary,
       });
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Spawned ${res.slug} (${agent})` });
@@ -2029,6 +2192,8 @@ export function App({ mainBranch = "main" }: AppProps) {
             : `Applied ${slug} → ${targetBranch}`,
       });
       refreshProjectRef.current();
+      // Fetch AI follow-up suggestions in the background.
+      void doFetchAiFollowUps(slug, mergedTask);
     } catch (err) {
       if (controller.signal.aborted) {
         await recordLifecycle(slug, null).catch(() => {});
@@ -2050,6 +2215,18 @@ export function App({ mainBranch = "main" }: AppProps) {
         applyAbortRef.current = null;
         applySlugRef.current = null;
       }
+    }
+  }
+
+  async function doFetchAiFollowUps(_slug: string, task: Task) {
+    dispatch({ type: "mode/aiFollowUpLoading" });
+    try {
+      const diff = await gitDiff(task.path, targetBranch, 8000);
+      const followUps = await fetchAiFollowUps(task, diff);
+      dispatch({ type: "aiFollowUp/loaded", followUps });
+    } catch {
+      // Silently return to list on AI errors — not critical.
+      dispatch({ type: "mode/list" });
     }
   }
 
@@ -2396,6 +2573,7 @@ export function App({ mainBranch = "main" }: AppProps) {
           density={state.listDensity}
           width={cols - 2}
           height={listHeight}
+          overlaps={state.taskOverlaps}
         />
       </Box>
       <Box flexGrow={1} flexDirection="column">
@@ -2419,6 +2597,47 @@ export function App({ mainBranch = "main" }: AppProps) {
           />
         ) : state.mode === "newTaskAgent" ? (
           <AgentPicker label={state.pendingDescription} intent="spawn" />
+        ) : state.mode === "contextPicker" ? (
+          <ContextPickerPrompt
+            tasks={state.tasks}
+            selectedIndex={state.contextPickerIndex}
+            description={state.pendingDescription}
+            width={cols - 6}
+          />
+        ) : state.mode === "aiFollowUpLoading" ? (
+          <Box paddingX={1}>
+            <Text color="yellow">Fetching AI follow-up suggestions…</Text>
+          </Box>
+        ) : state.mode === "aiFollowUpPicker" ? (
+          <AiFollowUpOverlay
+            followUps={state.aiFollowUps}
+            selectedIndex={state.aiFollowUpSelectedIndex}
+            taskSlug={state.selectedSlug ?? ""}
+            width={cols - 6}
+          />
+        ) : state.mode === "goalDecompose" ? (
+          <GoalDecomposePrompt
+            onSpawnAll={(subtasks) => {
+              dispatch({ type: "mode/spawning" });
+              (async () => {
+                for (const desc of subtasks) {
+                  await spawnAgent({
+                    description: desc,
+                    agent: "claude",
+                    base: targetBranch === "main" ? undefined : targetBranch,
+                    anchorPaneId: pickStackAnchor(),
+                  }).catch(() => {});
+                }
+                dispatch({ type: "mode/list" });
+                dispatch({
+                  type: "flash",
+                  message: `Spawned ${subtasks.length} parallel task${subtasks.length === 1 ? "" : "s"}.`,
+                });
+              })();
+            }}
+            onCancel={() => dispatch({ type: "mode/list" })}
+            width={cols - 6}
+          />
         ) : state.mode === "resumeAgentPicker" ? (
           <AgentPicker
             label={state.pendingResumeSlug ?? "(unknown)"}
@@ -2459,6 +2678,7 @@ export function App({ mainBranch = "main" }: AppProps) {
             height={inspectorHeight}
             width={cols - 4}
             offset={offsetForView}
+            overlaps={selectedTask ? state.taskOverlaps.get(selectedTask.slug) : undefined}
           />
         )}
       </Box>
