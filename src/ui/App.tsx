@@ -15,6 +15,7 @@ import { StatusBar } from "./StatusBar.js";
 import { DescriptionPrompt, AgentPicker } from "./NewTaskPrompt.js";
 import { ConfirmPrompt } from "./ConfirmPrompt.js";
 import { SendInputPrompt } from "./SendInputPrompt.js";
+import { ContinuePrompt } from "./ContinuePrompt.js";
 import { FilterPrompt } from "./FilterPrompt.js";
 import { HelpOverlay } from "./HelpOverlay.js";
 import { CommandPalette } from "./CommandPalette.js";
@@ -119,7 +120,7 @@ type Action =
   | { type: "mode/syncing" }
   | { type: "mode/killing" }
   | { type: "mode/closingAll" }
-  | { type: "mode/resumeAgentPicker"; slug: string }
+  | { type: "mode/resumeAgentPicker"; slug: string; prompt?: string }
   | { type: "mode/resuming" }
   | { type: "mode/list" }
   | { type: "inspector/setMode"; mode: InspectorMode }
@@ -155,7 +156,9 @@ type Action =
   | { type: "aiFollowUp/loaded"; followUps: SuggestedFollowUp[] }
   | { type: "aiFollowUp/selectNext" }
   | { type: "aiFollowUp/selectPrev" }
-  | { type: "mode/goalDecompose" };
+  | { type: "mode/goalDecompose" }
+  | { type: "mode/continuePrompt"; slug: string }
+  | { type: "continuePrompt/setValue"; value: string };
 
 interface RenderState extends AppState {
   /** Per-slug per-mode cache. */
@@ -408,6 +411,7 @@ function reducer(s: RenderState, a: Action): RenderState {
         ...s,
         mode: "resumeAgentPicker",
         pendingResumeSlug: a.slug,
+        pendingContinuePrompt: a.prompt ?? s.pendingContinuePrompt,
       };
     case "mode/resuming":
       return { ...s, mode: "resuming" };
@@ -422,7 +426,10 @@ function reducer(s: RenderState, a: Action): RenderState {
         newTaskDescription: "",
         newTaskCursor: 0,
         pendingResumeSlug: null,
+        pendingContinueSlug: null,
         sendInputValue: "",
+        continuePromptValue: "",
+        pendingContinuePrompt: "",
         pendingClipboardImage: undefined,
         pendingAttachedImages: undefined,
       };
@@ -464,6 +471,16 @@ function reducer(s: RenderState, a: Action): RenderState {
       };
     case "sendInput/setValue":
       return { ...s, sendInputValue: a.value };
+    case "mode/continuePrompt":
+      return {
+        ...s,
+        mode: "continuePrompt",
+        pendingContinueSlug: a.slug,
+        continuePromptValue: "",
+        inspectorMode: "diff",
+      };
+    case "continuePrompt/setValue":
+      return { ...s, continuePromptValue: a.value };
     case "filter/set": {
       const query = a.value;
       return {
@@ -1551,6 +1568,10 @@ export function App({ mainBranch = "main" }: AppProps) {
         if (key.escape) dispatch({ type: "mode/list" });
         return;
       }
+      if (state.mode === "continuePrompt") {
+        if (key.escape) dispatch({ type: "mode/list" });
+        return;
+      }
       if (state.mode === "filter") {
         // TextInput handles search text. Escape leaves the active filter in
         // place; clear it by deleting the query.
@@ -1573,13 +1594,13 @@ export function App({ mainBranch = "main" }: AppProps) {
       if (state.mode === "resumeAgentPicker") {
         if (key.escape) dispatch({ type: "mode/list" });
         if (input === "c" && state.pendingResumeSlug) {
-          void doResume(state.pendingResumeSlug, "claude");
+          void doResume(state.pendingResumeSlug, "claude", state.pendingContinuePrompt || undefined);
         }
         if (input === "x" && state.pendingResumeSlug) {
-          void doResume(state.pendingResumeSlug, "codex");
+          void doResume(state.pendingResumeSlug, "codex", state.pendingContinuePrompt || undefined);
         }
         if (input === "o" && state.pendingResumeSlug) {
-          void doResume(state.pendingResumeSlug, "opencode");
+          void doResume(state.pendingResumeSlug, "opencode", state.pendingContinuePrompt || undefined);
         }
         return;
       }
@@ -1844,6 +1865,10 @@ export function App({ mainBranch = "main" }: AppProps) {
         requestSendSelected();
         return;
       }
+      if (input === "c") {
+        requestContinueSelected();
+        return;
+      }
 
       if (input === "?") {
         dispatch({ type: "mode/help" });
@@ -2001,6 +2026,43 @@ export function App({ mainBranch = "main" }: AppProps) {
     dispatch({ type: "mode/confirmKill" });
   }
 
+  function requestContinueSelected() {
+    const slug = state.selectedSlug;
+    if (!slug) return;
+    if (!inSess) {
+      dispatch({ type: "flash", message: "Not in zellij - resume disabled." });
+      return;
+    }
+    const task = state.tasks.find((t) => t.slug === slug);
+    if (!task || task.state === "merged" || task.state === "merging") {
+      dispatch({ type: "flash", message: `Cannot continue ${slug} in this state.` });
+      return;
+    }
+    dispatch({ type: "mode/continuePrompt", slug });
+  }
+
+  async function enterContinueWithPrompt(slug: string, prompt: string) {
+    const task = state.tasks.find((t) => t.slug === slug);
+    if (task?.paneId) {
+      // Pane still alive — send directly instead of opening a second one.
+      const ok = await sendKeysToPaneId(task.paneId, prompt);
+      if (!ok) {
+        dispatch({
+          type: "error",
+          message: `Could not send to ${slug} — pane may have closed.`,
+        });
+      }
+    } else {
+      // No live pane — resume and inject the follow-up once Claude is ready.
+      const recorded = await getAgent(slug);
+      if (recorded) {
+        void doResume(slug, recorded, prompt);
+      } else {
+        dispatch({ type: "mode/resumeAgentPicker", slug, prompt });
+      }
+    }
+  }
+
   function requestSendSelected() {
     const slug = state.selectedSlug;
     if (!slug) return;
@@ -2038,7 +2100,8 @@ export function App({ mainBranch = "main" }: AppProps) {
     } else if (input === "enter") {
       dispatch({ type: "mode/list" });
       requestFocusOrResume();
-    } else if (input === "i") requestSendSelected();
+    } else if (input === "c") requestContinueSelected();
+    else if (input === "i") requestSendSelected();
     else if (input === "m") requestApplySelected();
     else if (input === "X") requestKillSelected();
     else if (input === "A") void doArchiveSelected();
@@ -2456,19 +2519,37 @@ export function App({ mainBranch = "main" }: AppProps) {
     dispatch({ type: "mode/resumeAgentPicker", slug });
   }
 
-  async function doResume(slug: string, agent: AgentKind) {
+  async function doResume(slug: string, agent: AgentKind, followUpPrompt?: string) {
     dispatch({ type: "mode/resuming" });
     try {
-      await resumeAgent({
+      const { paneId } = await resumeAgent({
         slug,
         agent,
         anchorPaneId: pickStackAnchor(slug),
       });
+
       dispatch({ type: "mode/list" });
-      dispatch({
-        type: "flash",
-        message: `Resumed ${slug} (${agent})`,
-      });
+      dispatch({ type: "flash", message: `Resumed ${slug} (${agent})` });
+
+      if (followUpPrompt && paneId) {
+        // Fire-and-forget: wait for Claude's prompt then inject the follow-up.
+        void (async () => {
+          const deadline = Date.now() + 30_000;
+          let sent = false;
+          while (Date.now() < deadline) {
+            await new Promise<void>((r) => setTimeout(r, 600));
+            const screen = await dumpScreen(paneId);
+            if (detectWaiting(screen)) {
+              await sendKeysToPaneId(paneId, followUpPrompt);
+              sent = true;
+              break;
+            }
+          }
+          if (!sent) {
+            await sendKeysToPaneId(paneId, followUpPrompt);
+          }
+        })();
+      }
     } catch (err) {
       dispatch({ type: "mode/list" });
       dispatch({
@@ -2486,10 +2567,20 @@ export function App({ mainBranch = "main" }: AppProps) {
     state.mode === "killing" ||
     state.mode === "closingAll";
   const showSendInput = state.mode === "sendInput" || state.mode === "sending";
+  const showContinuePrompt = state.mode === "continuePrompt";
   const showFilter = state.mode === "filter";
+  const showNewTask =
+    state.mode === "newTaskDescription" ||
+    state.mode === "newTaskAgent" ||
+    state.mode === "resumeAgentPicker";
   // Bordered prompt + title + hint + input/confirm row. The explicit slot
   // prevents Ink from letting prompt rows overlap the inspector.
-  const bottomStripHeight = showConfirm || showSendInput || showFilter ? 7 : 0;
+  // newTask/agentPicker need 9 lines (AgentPicker has 3 options + esc line).
+  const bottomStripHeight = showNewTask
+    ? 9
+    : showConfirm || showSendInput || showContinuePrompt || showFilter
+      ? 7
+      : 0;
   const desiredListHeight = taskListLineCount(
     visibleTasks,
     state.tasks.length,
@@ -2575,16 +2666,7 @@ export function App({ mainBranch = "main" }: AppProps) {
         />
       </Box>
       <Box flexGrow={1} flexDirection="column">
-        {state.mode === "newTaskDescription" ? (
-          <DescriptionPrompt
-            value={state.newTaskDescription}
-            cursor={state.newTaskCursor}
-            width={cols - 2}
-            hasClipboardImage={!!state.pendingClipboardImage}
-          />
-        ) : state.mode === "newTaskAgent" ? (
-          <AgentPicker label={state.pendingDescription} intent="spawn" />
-        ) : state.mode === "aiFollowUpLoading" ? (
+        {state.mode === "aiFollowUpLoading" ? (
           <Box paddingX={1}>
             <Text color="yellow">Fetching AI follow-up suggestions…</Text>
           </Box>
@@ -2617,11 +2699,6 @@ export function App({ mainBranch = "main" }: AppProps) {
             }}
             onCancel={() => dispatch({ type: "mode/list" })}
             width={cols - 6}
-          />
-        ) : state.mode === "resumeAgentPicker" ? (
-          <AgentPicker
-            label={state.pendingResumeSlug ?? "(unknown)"}
-            intent="resume"
           />
         ) : state.mode === "spawning" ? (
           <Box paddingX={1}>
@@ -2664,7 +2741,23 @@ export function App({ mainBranch = "main" }: AppProps) {
       </Box>
       {bottomStripHeight > 0 ? (
         <Box height={bottomStripHeight} flexDirection="column">
-          {showConfirm ? (
+          {showNewTask ? (
+            state.mode === "newTaskDescription" ? (
+              <DescriptionPrompt
+                value={state.newTaskDescription}
+                cursor={state.newTaskCursor}
+                width={cols - 2}
+                hasClipboardImage={!!state.pendingClipboardImage}
+              />
+            ) : state.mode === "newTaskAgent" ? (
+              <AgentPicker label={state.pendingDescription} intent="spawn" />
+            ) : (
+              <AgentPicker
+                label={state.pendingResumeSlug ?? "(unknown)"}
+                intent="resume"
+              />
+            )
+          ) : showConfirm ? (
             <ConfirmPrompt
               action={
                 state.mode === "confirmKill" || state.mode === "killing"
@@ -2706,6 +2799,17 @@ export function App({ mainBranch = "main" }: AppProps) {
                   return;
                 }
                 void doSendInput(slug, text);
+              }}
+            />
+          ) : showContinuePrompt ? (
+            <ContinuePrompt
+              slug={state.pendingContinueSlug ?? ""}
+              value={state.continuePromptValue}
+              onChange={(v) => dispatch({ type: "continuePrompt/setValue", value: v })}
+              onSubmit={(v) => {
+                const slug = state.pendingContinueSlug;
+                dispatch({ type: "mode/list" });
+                if (slug && v.trim()) void enterContinueWithPrompt(slug, v.trim());
               }}
             />
           ) : showFilter ? (

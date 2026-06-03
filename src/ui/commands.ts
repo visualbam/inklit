@@ -63,6 +63,14 @@ export function commandRows({
       muted: task.state === "merging",
     },
     {
+      key: "c",
+      label:
+        !isLiveTask(task) && task.state !== "merged" && task.state !== "merging"
+          ? "continue task with extra instruction"
+          : "continue unavailable in this state",
+      muted: isLiveTask(task) || task.state === "merged" || task.state === "merging",
+    },
+    {
       key: "i",
       label: isLiveTask(task)
         ? "message selected agent"
@@ -151,6 +159,7 @@ export function helpSections(targetBranch: string): HelpSection[] {
         ["2", "start the second suggested next task when shown"],
         ["s", "AI follow-up suggestions (done task) · sync from main (active task)"],
         ["enter", "focus pane (live) · resume agent (ready)"],
+        ["c", "continue task with extra instruction (resumes agent with follow-up)"],
         ["i", "send a one-line message to the selected agent"],
         ["m", `apply selected task to ${targetBranch} (review then confirm)`],
         ["esc", "cancel the selected background merge"],

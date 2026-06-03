@@ -106,6 +106,8 @@ export async function resumeAgent(opts: {
   cwd?: string;
   /** Optional pane id of an existing agent to stack onto. */
   anchorPaneId?: string | null;
+  /** Additional instruction sent to the agent after it starts (via send-keys). */
+  followUpPrompt?: string;
 }): Promise<SpawnResult> {
   let switchArgs: string[];
   if (opts.agent === "claude") {

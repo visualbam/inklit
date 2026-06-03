@@ -151,7 +151,8 @@ export interface AppState {
     | "error"
     | "aiFollowUpLoading"
     | "aiFollowUpPicker"
-    | "goalDecompose";
+    | "goalDecompose"
+    | "continuePrompt";
   inspectorMode: InspectorMode;
   /** Dense table vs stacked task-card board. */
   listDensity: TaskListDensity;
@@ -169,8 +170,14 @@ export interface AppState {
   pendingDescription: string;
   /** Slug awaiting agent selection during a resume flow. */
   pendingResumeSlug: string | null;
+  /** Slug of the task being continued (c keybind). */
+  pendingContinueSlug: string | null;
   /** Buffer for the inline send-to-agent prompt (i keybind). */
   sendInputValue: string;
+  /** Buffer for the continue-with-prompt input (c keybind). */
+  continuePromptValue: string;
+  /** Prompt text captured before handing off to resume flow. */
+  pendingContinuePrompt: string;
   /** Temp file path of a clipboard image detected when entering new-task mode. Not yet attached. */
   pendingClipboardImage?: string;
   /** Temp file paths of clipboard images the user has attached (ctrl+v). Index 0 = [image #1]. */
@@ -213,7 +220,10 @@ export const initialState: AppState = {
   pendingChord: null,
   pendingDescription: "",
   pendingResumeSlug: null,
+  pendingContinueSlug: null,
   sendInputValue: "",
+  continuePromptValue: "",
+  pendingContinuePrompt: "",
   filterQuery: "",
   inspectorOffsets: new Map(),
   taskOverlaps: new Map(),

@@ -11,6 +11,7 @@ import { StatusBar } from "./StatusBar.js";
 import { DescriptionPrompt, AgentPicker } from "./NewTaskPrompt.js";
 import { ConfirmPrompt } from "./ConfirmPrompt.js";
 import { SendInputPrompt } from "./SendInputPrompt.js";
+import { ContinuePrompt } from "./ContinuePrompt.js";
 import { FilterPrompt } from "./FilterPrompt.js";
 import { HelpOverlay } from "./HelpOverlay.js";
 import { CommandPalette } from "./CommandPalette.js";
@@ -236,6 +237,7 @@ function reducer(s, a) {
                 ...s,
                 mode: "resumeAgentPicker",
                 pendingResumeSlug: a.slug,
+                pendingContinuePrompt: a.prompt ?? s.pendingContinuePrompt,
             };
         case "mode/resuming":
             return { ...s, mode: "resuming" };
@@ -250,7 +252,10 @@ function reducer(s, a) {
                 newTaskDescription: "",
                 newTaskCursor: 0,
                 pendingResumeSlug: null,
+                pendingContinueSlug: null,
                 sendInputValue: "",
+                continuePromptValue: "",
+                pendingContinuePrompt: "",
                 pendingClipboardImage: undefined,
                 pendingAttachedImages: undefined,
             };
@@ -287,6 +292,16 @@ function reducer(s, a) {
             };
         case "sendInput/setValue":
             return { ...s, sendInputValue: a.value };
+        case "mode/continuePrompt":
+            return {
+                ...s,
+                mode: "continuePrompt",
+                pendingContinueSlug: a.slug,
+                continuePromptValue: "",
+                inspectorMode: "diff",
+            };
+        case "continuePrompt/setValue":
+            return { ...s, continuePromptValue: a.value };
         case "filter/set": {
             const query = a.value;
             return {
@@ -1305,6 +1320,11 @@ export function App({ mainBranch = "main" }) {
                 dispatch({ type: "mode/list" });
             return;
         }
+        if (state.mode === "continuePrompt") {
+            if (key.escape)
+                dispatch({ type: "mode/list" });
+            return;
+        }
         if (state.mode === "filter") {
             // TextInput handles search text. Escape leaves the active filter in
             // place; clear it by deleting the query.
@@ -1328,13 +1348,13 @@ export function App({ mainBranch = "main" }) {
             if (key.escape)
                 dispatch({ type: "mode/list" });
             if (input === "c" && state.pendingResumeSlug) {
-                void doResume(state.pendingResumeSlug, "claude");
+                void doResume(state.pendingResumeSlug, "claude", state.pendingContinuePrompt || undefined);
             }
             if (input === "x" && state.pendingResumeSlug) {
-                void doResume(state.pendingResumeSlug, "codex");
+                void doResume(state.pendingResumeSlug, "codex", state.pendingContinuePrompt || undefined);
             }
             if (input === "o" && state.pendingResumeSlug) {
-                void doResume(state.pendingResumeSlug, "opencode");
+                void doResume(state.pendingResumeSlug, "opencode", state.pendingContinuePrompt || undefined);
             }
             return;
         }
@@ -1599,6 +1619,10 @@ export function App({ mainBranch = "main" }) {
             requestSendSelected();
             return;
         }
+        if (input === "c") {
+            requestContinueSelected();
+            return;
+        }
         if (input === "?") {
             dispatch({ type: "mode/help" });
             return;
@@ -1743,6 +1767,44 @@ export function App({ mainBranch = "main" }) {
         }
         dispatch({ type: "mode/confirmKill" });
     }
+    function requestContinueSelected() {
+        const slug = state.selectedSlug;
+        if (!slug)
+            return;
+        if (!inSess) {
+            dispatch({ type: "flash", message: "Not in zellij - resume disabled." });
+            return;
+        }
+        const task = state.tasks.find((t) => t.slug === slug);
+        if (!task || task.state === "merged" || task.state === "merging") {
+            dispatch({ type: "flash", message: `Cannot continue ${slug} in this state.` });
+            return;
+        }
+        dispatch({ type: "mode/continuePrompt", slug });
+    }
+    async function enterContinueWithPrompt(slug, prompt) {
+        const task = state.tasks.find((t) => t.slug === slug);
+        if (task?.paneId) {
+            // Pane still alive — send directly instead of opening a second one.
+            const ok = await sendKeysToPaneId(task.paneId, prompt);
+            if (!ok) {
+                dispatch({
+                    type: "error",
+                    message: `Could not send to ${slug} — pane may have closed.`,
+                });
+            }
+        }
+        else {
+            // No live pane — resume and inject the follow-up once Claude is ready.
+            const recorded = await getAgent(slug);
+            if (recorded) {
+                void doResume(slug, recorded, prompt);
+            }
+            else {
+                dispatch({ type: "mode/resumeAgentPicker", slug, prompt });
+            }
+        }
+    }
     function requestSendSelected() {
         const slug = state.selectedSlug;
         if (!slug)
@@ -1787,6 +1849,8 @@ export function App({ mainBranch = "main" }) {
             dispatch({ type: "mode/list" });
             requestFocusOrResume();
         }
+        else if (input === "c")
+            requestContinueSelected();
         else if (input === "i")
             requestSendSelected();
         else if (input === "m")
@@ -2227,19 +2291,35 @@ export function App({ mainBranch = "main" }) {
         // outside it). Ask the user which agent to relaunch.
         dispatch({ type: "mode/resumeAgentPicker", slug });
     }
-    async function doResume(slug, agent) {
+    async function doResume(slug, agent, followUpPrompt) {
         dispatch({ type: "mode/resuming" });
         try {
-            await resumeAgent({
+            const { paneId } = await resumeAgent({
                 slug,
                 agent,
                 anchorPaneId: pickStackAnchor(slug),
             });
             dispatch({ type: "mode/list" });
-            dispatch({
-                type: "flash",
-                message: `Resumed ${slug} (${agent})`,
-            });
+            dispatch({ type: "flash", message: `Resumed ${slug} (${agent})` });
+            if (followUpPrompt && paneId) {
+                // Fire-and-forget: wait for Claude's prompt then inject the follow-up.
+                void (async () => {
+                    const deadline = Date.now() + 30_000;
+                    let sent = false;
+                    while (Date.now() < deadline) {
+                        await new Promise((r) => setTimeout(r, 600));
+                        const screen = await dumpScreen(paneId);
+                        if (detectWaiting(screen)) {
+                            await sendKeysToPaneId(paneId, followUpPrompt);
+                            sent = true;
+                            break;
+                        }
+                    }
+                    if (!sent) {
+                        await sendKeysToPaneId(paneId, followUpPrompt);
+                    }
+                })();
+            }
         }
         catch (err) {
             dispatch({ type: "mode/list" });
@@ -2256,10 +2336,19 @@ export function App({ mainBranch = "main" }) {
         state.mode === "killing" ||
         state.mode === "closingAll";
     const showSendInput = state.mode === "sendInput" || state.mode === "sending";
+    const showContinuePrompt = state.mode === "continuePrompt";
     const showFilter = state.mode === "filter";
+    const showNewTask = state.mode === "newTaskDescription" ||
+        state.mode === "newTaskAgent" ||
+        state.mode === "resumeAgentPicker";
     // Bordered prompt + title + hint + input/confirm row. The explicit slot
     // prevents Ink from letting prompt rows overlap the inspector.
-    const bottomStripHeight = showConfirm || showSendInput || showFilter ? 7 : 0;
+    // newTask/agentPicker need 9 lines (AgentPicker has 3 options + esc line).
+    const bottomStripHeight = showNewTask
+        ? 9
+        : showConfirm || showSendInput || showContinuePrompt || showFilter
+            ? 7
+            : 0;
     const desiredListHeight = taskListLineCount(visibleTasks, state.tasks.length, state.filterQuery, state.listDensity);
     const minimumListHeight = taskListMinimumHeight(visibleTasks, state.tasks.length, state.filterQuery, state.listDensity);
     const preferredListHeight = Math.max(minimumListHeight, Math.floor(rows * (state.listDensity === "compact" ? 0.5 : 0.42)));
@@ -2285,7 +2374,7 @@ export function App({ mainBranch = "main" }) {
         React.createElement(MainVersionBar, { mainVersion: state.mainVersion, targetBranch: targetBranch, tasks: state.tasks, visibleTaskCount: visibleTasks.length, filterQuery: state.filterQuery, width: cols - 2 }),
         React.createElement(Box, { flexDirection: "column", height: listHeight },
             React.createElement(TaskList, { tasks: visibleTasks, selectedSlug: state.selectedSlug, totalTasks: state.tasks.length, filterQuery: state.filterQuery, density: state.listDensity, width: cols - 2, height: listHeight, overlaps: state.taskOverlaps })),
-        React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "newTaskDescription" ? (React.createElement(DescriptionPrompt, { value: state.newTaskDescription, cursor: state.newTaskCursor, width: cols - 2, hasClipboardImage: !!state.pendingClipboardImage })) : state.mode === "newTaskAgent" ? (React.createElement(AgentPicker, { label: state.pendingDescription, intent: "spawn" })) : state.mode === "aiFollowUpLoading" ? (React.createElement(Box, { paddingX: 1 },
+        React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "aiFollowUpLoading" ? (React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { color: "yellow" }, "Fetching AI follow-up suggestions\u2026"))) : state.mode === "aiFollowUpPicker" ? (React.createElement(AiFollowUpOverlay, { followUps: state.aiFollowUps, selectedIndex: state.aiFollowUpSelectedIndex, taskSlug: state.selectedSlug ?? "", width: cols - 6 })) : state.mode === "goalDecompose" ? (React.createElement(GoalDecomposePrompt, { onSpawnAll: (subtasks) => {
                 dispatch({ type: "mode/spawning" });
                 (async () => {
@@ -2303,11 +2392,11 @@ export function App({ mainBranch = "main" }) {
                         message: `Spawned ${subtasks.length} parallel task${subtasks.length === 1 ? "" : "s"}.`,
                     });
                 })();
-            }, onCancel: () => dispatch({ type: "mode/list" }), width: cols - 6 })) : state.mode === "resumeAgentPicker" ? (React.createElement(AgentPicker, { label: state.pendingResumeSlug ?? "(unknown)", intent: "resume" })) : state.mode === "spawning" ? (React.createElement(Box, { paddingX: 1 },
+            }, onCancel: () => dispatch({ type: "mode/list" }), width: cols - 6 })) : state.mode === "spawning" ? (React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { color: "yellow" }, "spawning\u2026"))) : state.mode === "resuming" ? (React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { color: "yellow" }, "resuming\u2026"))) : state.mode === "closingAll" ? (React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { color: "yellow" }, "closing live agent panes\u2026"))) : state.mode === "commandPalette" ? (React.createElement(CommandPalette, { selectedTask: selectedTask, density: state.listDensity, targetBranch: targetBranch, showArchived: state.showArchived, inSession: inSess, height: inspectorHeight, width: cols - 4 })) : (React.createElement(Inspector, { task: selectedTask, mode: state.inspectorMode, targetBranch: targetBranch, diff: content.diff, log: content.log, agent: content.agent, files: content.files, loading: state.inspectorLoading, height: inspectorHeight, width: cols - 4, offset: offsetForView, overlaps: selectedTask ? state.taskOverlaps.get(selectedTask.slug) : undefined }))),
-        bottomStripHeight > 0 ? (React.createElement(Box, { height: bottomStripHeight, flexDirection: "column" }, showConfirm ? (React.createElement(ConfirmPrompt, { action: state.mode === "confirmKill" || state.mode === "killing"
+        bottomStripHeight > 0 ? (React.createElement(Box, { height: bottomStripHeight, flexDirection: "column" }, showNewTask ? (state.mode === "newTaskDescription" ? (React.createElement(DescriptionPrompt, { value: state.newTaskDescription, cursor: state.newTaskCursor, width: cols - 2, hasClipboardImage: !!state.pendingClipboardImage })) : state.mode === "newTaskAgent" ? (React.createElement(AgentPicker, { label: state.pendingDescription, intent: "spawn" })) : (React.createElement(AgentPicker, { label: state.pendingResumeSlug ?? "(unknown)", intent: "resume" }))) : showConfirm ? (React.createElement(ConfirmPrompt, { action: state.mode === "confirmKill" || state.mode === "killing"
                 ? "kill"
                 : state.mode === "confirmCloseAll" ||
                     state.mode === "closingAll"
@@ -2328,6 +2417,11 @@ export function App({ mainBranch = "main" }) {
                     return;
                 }
                 void doSendInput(slug, text);
+            } })) : showContinuePrompt ? (React.createElement(ContinuePrompt, { slug: state.pendingContinueSlug ?? "", value: state.continuePromptValue, onChange: (v) => dispatch({ type: "continuePrompt/setValue", value: v }), onSubmit: (v) => {
+                const slug = state.pendingContinueSlug;
+                dispatch({ type: "mode/list" });
+                if (slug && v.trim())
+                    void enterContinueWithPrompt(slug, v.trim());
             } })) : showFilter ? (React.createElement(FilterPrompt, { value: state.filterQuery, matched: visibleTasks.length, total: state.tasks.length, onChange: (v) => dispatch({ type: "filter/set", value: v }), onSubmit: () => dispatch({ type: "mode/list" }) })) : null)) : null,
         React.createElement(StatusBar, { flash: state.flash, error: state.error, taskCount: state.tasks.length, selectedTask: selectedTask, inSession: inSess, filterQuery: state.filterQuery, visibleTaskCount: visibleTasks.length, density: state.listDensity, showArchived: state.showArchived, width: cols - 2 })));
 }
