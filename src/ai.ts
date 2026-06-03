@@ -1,3 +1,5 @@
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 import { execa } from "execa";
 import type { Task, SuggestedFollowUp } from "./model.js";
 
@@ -36,19 +38,54 @@ function extractJson<T>(raw: string): T {
   return JSON.parse(text.slice(start, end + 1)) as T;
 }
 
+async function readTaskSummaries(cwd: string, maxChars = 4000): Promise<string> {
+  const tasksDir = join(cwd, ".inklit", "tasks");
+  let files: string[];
+  try {
+    files = (await fs.readdir(tasksDir)).filter((f) => f.endsWith(".md"));
+  } catch {
+    return "";
+  }
+  if (files.length === 0) return "";
+  // Sort newest-first so the char cap keeps the most recently completed work.
+  const withMtime = await Promise.all(
+    files.map(async (f) => ({
+      f,
+      mtime: await fs.stat(join(tasksDir, f)).then((s) => s.mtimeMs).catch(() => 0),
+    }))
+  );
+  withMtime.sort((a, b) => b.mtime - a.mtime);
+  const parts: string[] = [];
+  let total = 0;
+  for (const { f } of withMtime) {
+    const content = await fs.readFile(join(tasksDir, f), "utf-8").catch(() => "");
+    if (!content.trim()) continue;
+    const entry = `### ${f}\n${content.trim()}`;
+    if (total + entry.length > maxChars) break;
+    parts.push(entry);
+    total += entry.length;
+  }
+  return parts.join("\n\n");
+}
+
 /**
  * Call Claude to suggest 2-3 follow-up tasks based on what was just applied.
  * Uses `claude -p` (non-interactive) with the existing subscription auth.
  */
 export async function fetchAiFollowUps(
   task: Task,
-  diff: string
+  diff: string,
+  cwd?: string
 ): Promise<SuggestedFollowUp[]> {
   const diffSnippet = diff.length > 8000 ? diff.slice(0, 8000) + "\n…(truncated)" : diff;
+  const summaries = cwd ? await readTaskSummaries(cwd) : "";
+  const summarySection = summaries
+    ? `\nPreviously completed tasks (avoid re-suggesting these):\n${summaries}\n`
+    : "";
   const prompt = `You are helping a developer decide what to work on next after applying a code change.
 
 Task that was just applied: "${task.subject || task.slug}"
-
+${summarySection}
 Diff summary:
 ${diffSnippet}
 
@@ -77,16 +114,21 @@ Suggest exactly 2-3 follow-up tasks that would naturally come next. Return ONLY 
  */
 export async function decomposeGoal(
   goal: string,
-  fileList: string[]
+  fileList: string[],
+  cwd?: string
 ): Promise<string[]> {
   const fileContext =
     fileList.length > 0
       ? `\nRepo files (sample):\n${fileList.slice(0, 100).join("\n")}\n`
       : "";
+  const summaries = cwd ? await readTaskSummaries(cwd) : "";
+  const summarySection = summaries
+    ? `\nAlready completed tasks (do not suggest these as subtasks):\n${summaries}\n`
+    : "";
   const prompt = `You are helping a developer break a coding goal into parallel AI agent tasks.
 
 Goal: "${goal}"
-${fileContext}
+${summarySection}${fileContext}
 Break this goal into 3-5 independent subtasks that can be worked on in parallel by separate AI coding agents. Each subtask should be self-contained and not depend on the others completing first.
 
 Return ONLY a JSON array of task description strings with no other text:

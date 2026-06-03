@@ -23,7 +23,7 @@ export function GoalDecomposePrompt({ onSpawnAll, onCancel, width }) {
         setStep("loading");
         try {
             const files = await listRepoFiles();
-            const tasks = await decomposeGoal(trimmed, files);
+            const tasks = await decomposeGoal(trimmed, files, process.cwd());
             if (tasks.length === 0)
                 throw new Error("Claude returned no subtasks");
             setSubtasks(tasks);

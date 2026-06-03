@@ -9,6 +9,16 @@ import type { AgentKind } from "./model.js";
 const INKLIT_INSTRUCTION = (tasksDir: string, slug: string) =>
   `\n\n---\nBefore starting: check ${tasksDir}/ for prior-task summaries and read any that seem relevant.\nWhen done: write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed.`;
 
+const INKLIT_RESUME_REMINDER = (tasksDir: string, slug: string) =>
+  `Resuming task. Reminder: when done, write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed. Check other summaries in ${tasksDir}/ if relevant context is missing.`;
+
+/** Remove the .inklit task summary for a killed/abandoned task. No-op if not found. */
+export async function removeTaskSummary(slug: string, cwd?: string): Promise<void> {
+  const mainPath = cwd ?? process.cwd();
+  const summaryPath = join(mainPath, ".inklit", "tasks", `${slug}.md`);
+  await fs.unlink(summaryPath).catch(() => {});
+}
+
 export interface SpawnResult {
   slug: string;
   paneId: string | null;
@@ -95,7 +105,10 @@ export async function resumeAgent(opts: {
 }): Promise<SpawnResult> {
   let switchArgs: string[];
   if (opts.agent === "claude") {
-    switchArgs = ["switch", opts.slug, "-x", "claude", "--", ...resumeArgsFor("claude")];
+    const mainPath = opts.cwd ?? process.cwd();
+    const tasksDir = join(mainPath, ".inklit", "tasks");
+    const reminder = INKLIT_RESUME_REMINDER(tasksDir, opts.slug);
+    switchArgs = ["switch", opts.slug, "-x", "claude", "--", ...resumeArgsFor("claude"), reminder];
   } else {
     const wrapPath = await ensureWrapper();
     const agentArgs = [opts.agent, ...resumeArgsFor(opts.agent)];

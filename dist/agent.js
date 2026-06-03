@@ -5,6 +5,13 @@ import { slugify } from "./wt.js";
 import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
 const INKLIT_INSTRUCTION = (tasksDir, slug) => `\n\n---\nBefore starting: check ${tasksDir}/ for prior-task summaries and read any that seem relevant.\nWhen done: write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed.`;
+const INKLIT_RESUME_REMINDER = (tasksDir, slug) => `Resuming task. Reminder: when done, write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed. Check other summaries in ${tasksDir}/ if relevant context is missing.`;
+/** Remove the .inklit task summary for a killed/abandoned task. No-op if not found. */
+export async function removeTaskSummary(slug, cwd) {
+    const mainPath = cwd ?? process.cwd();
+    const summaryPath = join(mainPath, ".inklit", "tasks", `${slug}.md`);
+    await fs.unlink(summaryPath).catch(() => { });
+}
 /**
  * Spawn a new agent task in its own worktree + zellij pane.
  *
@@ -66,7 +73,10 @@ export async function spawnAgent(opts) {
 export async function resumeAgent(opts) {
     let switchArgs;
     if (opts.agent === "claude") {
-        switchArgs = ["switch", opts.slug, "-x", "claude", "--", ...resumeArgsFor("claude")];
+        const mainPath = opts.cwd ?? process.cwd();
+        const tasksDir = join(mainPath, ".inklit", "tasks");
+        const reminder = INKLIT_RESUME_REMINDER(tasksDir, opts.slug);
+        switchArgs = ["switch", opts.slug, "-x", "claude", "--", ...resumeArgsFor("claude"), reminder];
     }
     else {
         const wrapPath = await ensureWrapper();

@@ -68,6 +68,30 @@ plumbing.
 For CLI/user-facing changes, update both README examples and the in-app help
 overlay, then verify the built help output when practical.
 
+## .inklit Task Memory
+
+Each project managed by inklit has a `.inklit/tasks/` directory in its root.
+This directory is gitignored and serves as local cross-task context for agents.
+
+**Protocol every spawned agent follows:**
+- **Before starting:** read any `.inklit/tasks/*.md` files that seem relevant to
+  the current task. These are compact summaries of prior completed work.
+- **When done:** write a summary to `.inklit/tasks/<slug>.md` covering: the goal,
+  the outcome (2–3 sentences), and the key files changed.
+
+**Lifecycle rules in inklit itself:**
+- Summaries are written by agents; inklit never writes them.
+- When a task is **killed**, inklit deletes its summary file (`removeTaskSummary`
+  in `agent.ts`) so abandoned work doesn't appear as completed context.
+- When a task is **merged**, the summary is intentionally kept — it represents
+  completed work that future agents should know about.
+- The summaries directory is created eagerly at spawn time.
+
+**AI integrations that read these summaries** (`src/ai.ts`):
+- `decomposeGoal`: skips subtasks that are already completed.
+- `fetchAiFollowUps`: avoids re-suggesting already-done work.
+- Summaries are sorted newest-first and capped at 4000 chars per AI call.
+
 ## Worktree Hygiene
 
 This repo may have unrelated in-progress edits. Before changing code, check the

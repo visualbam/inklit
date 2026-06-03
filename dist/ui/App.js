@@ -23,7 +23,7 @@ import { listProject, gitDiff, gitFiles, gitLog, gitReviewStats, gitChangedFileN
 import { computeOverlaps } from "../overlap.js";
 import { fetchAiFollowUps } from "../ai.js";
 import { inSession, dumpScreen, focusPaneByName, focusPaneId, focusOwnPane, closePaneByName, closePaneById, sendKeysToPaneId, sendKeysToSlug, panesSnapshot, } from "../zellij.js";
-import { spawnAgent, resumeAgent } from "../agent.js";
+import { spawnAgent, resumeAgent, removeTaskSummary } from "../agent.js";
 import { extractClipboardImage } from "../clipboard.js";
 import { getAgent, loadAll, recordPane, clearPane, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, clearStaleApplyOperations, signalDir, } from "../state.js";
 import { clearTaskPreview } from "../preview.js";
@@ -1922,7 +1922,7 @@ export function App({ mainBranch = "main" }) {
         dispatch({ type: "mode/aiFollowUpLoading" });
         try {
             const diff = await gitDiff(task.path, targetBranch, 8000);
-            const followUps = await fetchAiFollowUps(task, diff);
+            const followUps = await fetchAiFollowUps(task, diff, process.cwd());
             dispatch({ type: "aiFollowUp/loaded", followUps });
         }
         catch {
@@ -2144,6 +2144,9 @@ export function App({ mainBranch = "main" }) {
             // Drop the state-file entry so a future task with the same slug
             // doesn't inherit the wrong agent kind.
             recordRemove(slug).catch(() => { });
+            // Remove any .inklit task summary so killed/abandoned work doesn't
+            // appear as completed context to future AI calls.
+            removeTaskSummary(slug).catch(() => { });
             dispatch({ type: "mode/list" });
             dispatch({ type: "flash", message: `Killed ${slug}` });
         }
