@@ -134,7 +134,6 @@ export interface AppState {
     | "list"
     | "newTaskDescription"
     | "newTaskAgent"
-    | "contextPicker"
     | "spawning"
     | "confirmMerge"
     | "confirmKill"

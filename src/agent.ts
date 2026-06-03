@@ -6,6 +6,9 @@ import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js
 import { refreshTaskPreview } from "./preview.js";
 import type { AgentKind } from "./model.js";
 
+const INKLIT_INSTRUCTION = (tasksDir: string, slug: string) =>
+  `\n\n---\nBefore starting: check ${tasksDir}/ for prior-task summaries and read any that seem relevant.\nWhen done: write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed.`;
+
 export interface SpawnResult {
   slug: string;
   paneId: string | null;
@@ -32,15 +35,16 @@ export async function spawnAgent(opts: {
   anchorPaneId?: string | null;
   /** Path to an image file to include as context in the initial prompt (claude only). */
   imagePath?: string;
-  /** Diff summary from a prior task to write as CONTEXT.md in the new worktree. */
-  contextSummary?: string;
 }): Promise<SpawnResult> {
   const slug = opts.branch ?? slugify(opts.description);
+  const mainPath = opts.cwd ?? process.cwd();
+  const tasksDir = join(mainPath, ".inklit", "tasks");
+  await fs.mkdir(tasksDir, { recursive: true }).catch(() => {});
 
-  const effectiveDescription =
-    opts.imagePath
-      ? `${opts.description}\n\nImage context: ${opts.imagePath}`
-      : opts.description;
+  const baseDescription = opts.imagePath
+    ? `${opts.description}\n\nImage context: ${opts.imagePath}`
+    : opts.description;
+  const effectiveDescription = baseDescription + INKLIT_INSTRUCTION(tasksDir, slug);
 
   let switchArgs: string[];
   if (opts.agent === "claude") {
@@ -67,12 +71,8 @@ export async function spawnAgent(opts: {
   // hundreds of ms because zellij + wt + agent boot).
   await recordSpawn(slug, opts.agent, paneId).catch(() => {});
   void refreshTaskPreview(slug, opts.cwd).catch(() => {});
-  const mainPath = opts.cwd ?? process.cwd();
   if (opts.agent === "claude") {
     void scheduleStopHook(slug, mainPath + "." + slug);
-  }
-  if (opts.contextSummary) {
-    void scheduleContextFile(slug, mainPath + "." + slug, opts.contextSummary);
   }
   return { slug, paneId };
 }
@@ -184,33 +184,6 @@ async function scheduleStopHook(slug: string, worktreePath: string): Promise<voi
   await injectStopHook(slug, worktreePath);
 }
 
-/**
- * Wait for the worktree directory to appear, then write CONTEXT.md so the
- * agent starts with knowledge of what the prior task changed.
- */
-async function scheduleContextFile(
-  _slug: string,
-  worktreePath: string,
-  contextSummary: string
-): Promise<void> {
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    try {
-      await fs.access(worktreePath);
-      break;
-    } catch {
-      await new Promise((r) => setTimeout(r, 150));
-    }
-  }
-  try {
-    await fs.access(worktreePath);
-  } catch {
-    return;
-  }
-  const contextPath = join(worktreePath, "CONTEXT.md");
-  const content = `# Context from prior task\n\nThe following diff was applied to the main branch before this task was created. Use it to understand what changed recently.\n\n\`\`\`diff\n${contextSummary}\n\`\`\`\n`;
-  await fs.writeFile(contextPath, content, "utf-8").catch(() => {});
-}
 
 async function injectStopHook(slug: string, worktreePath: string): Promise<void> {
   const settingsPath = join(worktreePath, ".claude", "settings.local.json");
