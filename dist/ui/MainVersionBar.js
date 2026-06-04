@@ -26,7 +26,16 @@ export function MainVersionBar({ mainVersion, targetBranch, tasks, visibleTaskCo
     const target = targetBranch && targetBranch !== mainVersion.branch
         ? ` · target ${targetBranch}`
         : "";
-    const summary = ` · main version ${mainVersion.branch || "unknown"} ${mainVersion.shortSha || "no sha"} ${mainVersion.dirty ? "dirty" : "clean"} · active ${counts.active} ready ${counts.ready}${counts.applying ? ` applying ${counts.applying}` : ""}${counts.failed ? ` failed ${counts.failed}` : ""} done ${counts.done}${target}${filter} · ${path}`;
+    const dirty = mainVersion.dirty ? "*" : "";
+    const countParts = [
+        counts.active ? `${counts.active} active` : null,
+        counts.ready ? `${counts.ready} ready` : null,
+        counts.applying ? `${counts.applying} applying` : null,
+        counts.failed ? `${counts.failed} failed` : null,
+        counts.done ? `${counts.done} done` : null,
+    ].filter(Boolean);
+    const countStr = countParts.length ? ` · ${countParts.join(" ")}` : "";
+    const summary = ` · ${mainVersion.branch || "unknown"} ${mainVersion.shortSha || "no sha"}${dirty}${countStr}${target}${filter} · ${path}`;
     const maxSummary = Math.max(12, width - "inklit ".length - 2);
     return (React.createElement(Box, { paddingX: 1 },
         React.createElement(Text, { bold: true, color: UI.accent }, "inklit"),

@@ -238,20 +238,18 @@ function DetailedTaskList({
   const reviewCol = 18;
   const fixed = 55 + reviewCol;
   const slugCol = Math.max(10, width - fixed - 2);
-  const divider = "─".repeat(Math.max(0, width - 2));
+  const rule = "╌".repeat(Math.max(0, width - 2));
   let currentGroup: string | null = null;
 
   return (
     <Box flexDirection="column">
       <Box paddingX={1}>
         <Text dimColor>
-          {pad("", 4)} {pad("task", slugCol)}{" "}
-          {pad("stage", 8)} {pad("pane", 9)} {pad("review", reviewCol)}{" "}
-          {pad("age", 5)}
+          {"    "}{pad("TASK", slugCol)}{" "}{pad("STAGE", 8)}{" "}{pad("PANE", 9)}{" "}{pad("REVIEW", reviewCol)}{" "}{"  "}{pad("AGE", 5)}
         </Text>
       </Box>
       <Box paddingX={1}>
-        <Text dimColor>{divider}</Text>
+        <Text dimColor>{rule}</Text>
       </Box>
       {hiddenAbove > 0 ? <HiddenMarker count={hiddenAbove} direction="above" /> : null}
       {tasks.map((t) => {
@@ -426,7 +424,7 @@ function EmptyBoard({
         command palette · <Text color={UI.accent}>?</Text> help
       </Text>
       <Text dimColor>
-        Agents run in zellij panes; quitting this board leaves them running.
+        Agents run headlessly in tmux; quitting this board leaves them running.
       </Text>
       {totalTasks > 0 ? (
         <Text dimColor>Archived tasks are hidden. Press z to show them.</Text>

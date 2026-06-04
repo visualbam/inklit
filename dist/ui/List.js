@@ -111,24 +111,24 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
     const reviewCol = 18;
     const fixed = 55 + reviewCol;
     const slugCol = Math.max(10, width - fixed - 2);
-    const divider = "─".repeat(Math.max(0, width - 2));
+    const rule = "╌".repeat(Math.max(0, width - 2));
     let currentGroup = null;
     return (React.createElement(Box, { flexDirection: "column" },
         React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { dimColor: true },
-                pad("", 4),
+                "    ",
+                pad("TASK", slugCol),
                 " ",
-                pad("task", slugCol),
+                pad("STAGE", 8),
                 " ",
-                pad("stage", 8),
+                pad("PANE", 9),
                 " ",
-                pad("pane", 9),
+                pad("REVIEW", reviewCol),
                 " ",
-                pad("review", reviewCol),
-                " ",
-                pad("age", 5))),
+                "  ",
+                pad("AGE", 5))),
         React.createElement(Box, { paddingX: 1 },
-            React.createElement(Text, { dimColor: true }, divider)),
+            React.createElement(Text, { dimColor: true }, rule)),
         hiddenAbove > 0 ? React.createElement(HiddenMarker, { count: hiddenAbove, direction: "above" }) : null,
         tasks.map((t) => {
             const group = groupForTask(t);
@@ -250,7 +250,7 @@ function EmptyBoard({ filterQuery, totalTasks, }) {
             "command palette \u00B7 ",
             React.createElement(Text, { color: UI.accent }, "?"),
             " help"),
-        React.createElement(Text, { dimColor: true }, "Agents run in zellij panes; quitting this board leaves them running."),
+        React.createElement(Text, { dimColor: true }, "Agents run headlessly in tmux; quitting this board leaves them running."),
         totalTasks > 0 ? (React.createElement(Text, { dimColor: true }, "Archived tasks are hidden. Press z to show them.")) : null));
 }
 function GroupHeader({ group }) {
