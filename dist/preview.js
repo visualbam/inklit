@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import net from "node:net";
 import { join } from "node:path";
+import { execa } from "execa";
 import { listProject } from "./wt.js";
 import { clearPreview, loadAll, recordPreview } from "./state.js";
 const TASK_PATH_POLL_MS = 250;
@@ -102,6 +103,9 @@ function renderListing(pathname, entries) {
   return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Preview</title><style>body{font:14px/1.4 system-ui,sans-serif;margin:24px}ul{padding-left:20px}a{text-decoration:none}</style></head><body><h1>Directory listing</h1><ul>" + links + "</ul></body></html>";
 }
 `;
+export async function openPreviewInBrowser(url) {
+    await execa("open", [url], { reject: false });
+}
 export async function refreshTaskPreview(slug, cwd) {
     const records = await loadAll().catch(() => ({}));
     const existing = records[slug];

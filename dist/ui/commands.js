@@ -66,7 +66,11 @@ export function commandRows({ task, density, targetBranch, showArchived, inSessi
                 ? "restore archived task"
                 : "archive selected task",
         muted: task.state === "merging",
-    }, { key: "t/f/d/l/a", label: "switch inspector mode" });
+    }, { key: "t/f/d/l/a", label: "switch inspector mode" }, {
+        key: "p",
+        label: task.preview ? `open preview: ${task.preview.url}` : "open preview (none available)",
+        muted: !task.preview,
+    });
     const suggestions = suggestedFollowUps(task);
     if (suggestions[0]) {
         rows.push({ key: "T / 1", label: `start next task: ${suggestions[0].title}` });
@@ -118,6 +122,7 @@ export function helpSections(targetBranch) {
                 ["c", "continue task with extra instruction (resumes agent with follow-up)"],
                 ["i", "send a one-line message to the selected agent"],
                 ["m", `apply selected task to ${targetBranch} (review then confirm)`],
+                ["p", "open task app preview in browser"],
                 ["esc", "cancel the selected background merge"],
                 ["A", "archive or restore selected ready/failed/done task"],
                 ["X", "kill selected - close pane + remove worktree"],

@@ -66,7 +66,7 @@ import {
   signalDir,
   type TaskRecord,
 } from "../state.js";
-import { clearTaskPreview } from "../preview.js";
+import { clearTaskPreview, openPreviewInBrowser } from "../preview.js";
 import { notify } from "../notify.js";
 import type {
   AgentKind,
@@ -1892,6 +1892,16 @@ export function App({ mainBranch = "main" }: AppProps) {
     dispatch({ type: "mode/newTaskAgent", description: followUp.prompt });
   }
 
+  async function doOpenPreview() {
+    const task = state.tasks.find(t => t.slug === state.selectedSlug) ?? null;
+    if (!task?.preview?.url) {
+      dispatch({ type: "flash", message: "No preview available for this task." });
+      return;
+    }
+    await openPreviewInBrowser(task.preview.url).catch(() => {});
+    dispatch({ type: "flash", message: `Opening ${task.preview.url}` });
+  }
+
   function refreshBoard() {
     fetchedRef.current.clear();
     dispatch({ type: "flash", message: "Refreshing task board…" });
@@ -2090,6 +2100,7 @@ export function App({ mainBranch = "main" }: AppProps) {
     else if (input === "m") requestApplySelected();
     else if (input === "X") requestKillSelected();
     else if (input === "A") void doArchiveSelected();
+    else if (input === "p") void doOpenPreview();
     else if (input === "T" || input === "1") startFollowUp(0);
     else if (input === "2") startFollowUp(1);
     else if (input === "t") {

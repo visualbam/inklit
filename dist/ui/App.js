@@ -28,7 +28,7 @@ import { sessionAlive, capturePane as tmuxCapturePane, sendKeys as tmuxSendKeys,
 import { spawnAgent, resumeAgent, removeTaskSummary } from "../agent.js";
 import { extractClipboardImage, extractClipboardImageSync } from "../clipboard.js";
 import { getAgent, loadAll, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, clearStaleApplyOperations, signalDir, } from "../state.js";
-import { clearTaskPreview } from "../preview.js";
+import { clearTaskPreview, openPreviewInBrowser } from "../preview.js";
 import { notify } from "../notify.js";
 import { initialState, lifecycleForTask } from "../model.js";
 const EMPTY_CONTENT = { diff: "", log: "", agent: "", files: [] };
@@ -1634,6 +1634,15 @@ export function App({ mainBranch = "main" }) {
         }
         dispatch({ type: "mode/newTaskAgent", description: followUp.prompt });
     }
+    async function doOpenPreview() {
+        const task = state.tasks.find(t => t.slug === state.selectedSlug) ?? null;
+        if (!task?.preview?.url) {
+            dispatch({ type: "flash", message: "No preview available for this task." });
+            return;
+        }
+        await openPreviewInBrowser(task.preview.url).catch(() => { });
+        dispatch({ type: "flash", message: `Opening ${task.preview.url}` });
+    }
     function refreshBoard() {
         fetchedRef.current.clear();
         dispatch({ type: "flash", message: "Refreshing task board…" });
@@ -1843,6 +1852,8 @@ export function App({ mainBranch = "main" }) {
             requestKillSelected();
         else if (input === "A")
             void doArchiveSelected();
+        else if (input === "p")
+            void doOpenPreview();
         else if (input === "T" || input === "1")
             startFollowUp(0);
         else if (input === "2")
