@@ -649,6 +649,10 @@ export function App({ mainBranch = "main" }) {
     const notifiedIdleRef = useRef(new Set());
     /** Slugs that received a Stop-hook signal and need an immediate screen dump. */
     const pendingSignalsRef = useRef(new Set());
+    /** Slugs for which AI follow-up pre-generation has been started. */
+    const preGenStartedRef = useRef(new Set());
+    /** Cached pre-generated follow-up promises, keyed by slug. */
+    const preGenFollowUpsRef = useRef(new Map());
     /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
     const closingAllRef = useRef(false);
     // Only one apply job can touch the target checkout at a time.
@@ -878,6 +882,25 @@ export function App({ mainBranch = "main" }) {
                 for (const t of finalTasks)
                     nextStates.set(t.slug, t.state);
                 prevStatesRef.current = nextStates;
+                // Pre-generate AI follow-up suggestions as soon as tasks become ready
+                // so the overlay appears instantly after merge instead of waiting for a
+                // fresh Claude call.
+                for (const t of finalTasks) {
+                    if (t.state === "ready") {
+                        if (!preGenStartedRef.current.has(t.slug) && t.path) {
+                            preGenStartedRef.current.add(t.slug);
+                            const taskSnapshot = { ...t };
+                            preGenFollowUpsRef.current.set(t.slug, gitDiff(taskSnapshot.path, targetBranch, 8000)
+                                .then((diff) => fetchAiFollowUps(taskSnapshot, diff, process.cwd()))
+                                .catch(() => []));
+                        }
+                    }
+                    else if (preGenStartedRef.current.has(t.slug)) {
+                        // Task left ready state (resumed/archived) — discard stale pre-gen.
+                        preGenStartedRef.current.delete(t.slug);
+                        preGenFollowUpsRef.current.delete(t.slug);
+                    }
+                }
                 if (!cancelled) {
                     dispatch({
                         type: "tasks/loaded",
@@ -1954,16 +1977,24 @@ export function App({ mainBranch = "main" }) {
             }
         }
     }
-    async function doFetchAiFollowUps(_slug, task) {
+    async function doFetchAiFollowUps(slug, task) {
         dispatch({ type: "mode/aiFollowUpLoading" });
         try {
-            const diff = await gitDiff(task.path, targetBranch, 8000);
-            const followUps = await fetchAiFollowUps(task, diff, process.cwd());
+            const cached = preGenFollowUpsRef.current.get(slug);
+            const followUps = cached
+                ? await cached
+                : await fetchAiFollowUps(task, await gitDiff(task.path, targetBranch, 8000), process.cwd());
+            if (followUps.length === 0)
+                throw new Error("no follow-ups");
             dispatch({ type: "aiFollowUp/loaded", followUps });
         }
         catch {
             // Silently return to list on AI errors — not critical.
             dispatch({ type: "mode/list" });
+        }
+        finally {
+            preGenFollowUpsRef.current.delete(slug);
+            preGenStartedRef.current.delete(slug);
         }
     }
     async function doSync(slug) {
