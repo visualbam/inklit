@@ -984,15 +984,29 @@ async function mergeToMainInner(
   signal?: AbortSignal
 ): Promise<void> {
   const originalBranch = await currentBranchName(worktreePath);
+  const mainPath = await mainWorktreePath(worktreePath);
+  const branch = originalBranch || (await currentBranchName(worktreePath));
+
   const wtMerge = () =>
     execa("wt", ["-C", worktreePath, "merge", target, "-y"], {
       reject: true,
       cancelSignal: signal,
     });
 
+  const autoCommit = async () => {
+    if (branch) {
+      await execa(
+        "git",
+        ["-C", mainPath, "commit", "--no-edit", "-m", `squash: ${branch}`],
+        { reject: false, cancelSignal: signal }
+      );
+    }
+  };
+
   // First attempt.
   try {
     await wtMerge();
+    await autoCommit();
     return;
   } catch (firstErr) {
     const e = firstErr as ExecaError;
@@ -1000,7 +1014,6 @@ async function mergeToMainInner(
 
     // Case 1: main has uncommitted changes blocking the push step.
     if (stderr.includes("conflicting uncommitted changes")) {
-      const mainPath = await mainWorktreePath(worktreePath);
       const stashedMain = await stashIfDirty(
         mainPath,
         "inklit-auto-stash-before-merge",
@@ -1008,6 +1021,7 @@ async function mergeToMainInner(
       );
       try {
         await wtMerge();
+        await autoCommit();
         return;
       } finally {
         if (stashedMain) await popStash(mainPath);
@@ -1024,6 +1038,7 @@ async function mergeToMainInner(
       await continueRebaseUntilDone(worktreePath, signal);
       try {
         await wtMerge();
+        await autoCommit();
         return;
       } catch {
         /* fall through to last-resort below */
@@ -1031,8 +1046,6 @@ async function mergeToMainInner(
     }
 
     // Last resort: manual squash merge via git so wt pre-checks can't block us.
-    const mainPath = await mainWorktreePath(worktreePath);
-    const branch = originalBranch || (await currentBranchName(worktreePath));
     if (!branch) {
       throw new WtError(
         `wt merge ${target} failed: ${e.shortMessage ?? e.message}`,

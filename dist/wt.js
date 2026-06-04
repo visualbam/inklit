@@ -740,13 +740,21 @@ export async function mergeToMain(worktreePath, target = "main", signal) {
 }
 async function mergeToMainInner(worktreePath, target, signal) {
     const originalBranch = await currentBranchName(worktreePath);
+    const mainPath = await mainWorktreePath(worktreePath);
+    const branch = originalBranch || (await currentBranchName(worktreePath));
     const wtMerge = () => execa("wt", ["-C", worktreePath, "merge", target, "-y"], {
         reject: true,
         cancelSignal: signal,
     });
+    const autoCommit = async () => {
+        if (branch) {
+            await execa("git", ["-C", mainPath, "commit", "--no-edit", "-m", `squash: ${branch}`], { reject: false, cancelSignal: signal });
+        }
+    };
     // First attempt.
     try {
         await wtMerge();
+        await autoCommit();
         return;
     }
     catch (firstErr) {
@@ -754,10 +762,10 @@ async function mergeToMainInner(worktreePath, target, signal) {
         const stderr = typeof e.stderr === "string" ? e.stderr : "";
         // Case 1: main has uncommitted changes blocking the push step.
         if (stderr.includes("conflicting uncommitted changes")) {
-            const mainPath = await mainWorktreePath(worktreePath);
             const stashedMain = await stashIfDirty(mainPath, "inklit-auto-stash-before-merge", signal);
             try {
                 await wtMerge();
+                await autoCommit();
                 return;
             }
             finally {
@@ -773,6 +781,7 @@ async function mergeToMainInner(worktreePath, target, signal) {
             await continueRebaseUntilDone(worktreePath, signal);
             try {
                 await wtMerge();
+                await autoCommit();
                 return;
             }
             catch {
@@ -780,8 +789,6 @@ async function mergeToMainInner(worktreePath, target, signal) {
             }
         }
         // Last resort: manual squash merge via git so wt pre-checks can't block us.
-        const mainPath = await mainWorktreePath(worktreePath);
-        const branch = originalBranch || (await currentBranchName(worktreePath));
         if (!branch) {
             throw new WtError(`wt merge ${target} failed: ${e.shortMessage ?? e.message}`, stderr);
         }
