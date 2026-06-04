@@ -15,7 +15,7 @@ function readyFollowUps(task: Task): SuggestedFollowUp[] {
     {
       title: "Harden before apply",
       detail: `${scope}: run focused checks and fix regressions.`,
-      prompt: `Review and harden ${task.slug} before apply: inspect the diff against the target branch, run the relevant checks for ${scope}, and fix any regressions.`,
+      prompt: `Review and harden ${task.slug} before applying: inspect the diff against the target branch for ${scope}, run the relevant linters and tests, fix any regressions or warnings, and ensure the task is clean and review-ready.`,
     },
   ];
 
@@ -23,7 +23,7 @@ function readyFollowUps(task: Task): SuggestedFollowUp[] {
     suggestions.push({
       title: "Clean untracked files",
       detail: `${fileCount(task.review?.untracked ?? 0, "untracked file")}: commit intentional files or update ignores.`,
-      prompt: `Audit the untracked files in ${task.slug}: decide which files should be committed, ignored, or removed, then make the task review-ready.`,
+      prompt: `Audit the untracked files in ${task.slug}: review each file and decide whether it should be committed (stage it), ignored (add to .gitignore), or deleted. Leave the task with a clean working tree and no stray files.`,
     });
   } else {
     suggestions.push({
@@ -32,7 +32,7 @@ function readyFollowUps(task: Task): SuggestedFollowUp[] {
         (task.review?.files ?? 0) > 0
           ? `Add or update tests around ${fileCount(task.review?.files ?? 0, "changed file")}.`
           : "Add focused tests or verification notes for the patch.",
-      prompt: `Add regression coverage for ${task.slug}: inspect the changed behavior, add or update focused tests where useful, and document any manual verification needed.`,
+      prompt: `Add regression coverage for ${task.slug}: inspect the diff to identify changed behaviors, write or update focused tests that would catch regressions in those behaviors, and document any manual verification steps needed for changes that can't be unit-tested.`,
     });
   }
 
@@ -44,12 +44,12 @@ function mergedFollowUps(task: Task): SuggestedFollowUp[] {
     {
       title: "Verify applied work",
       detail: "Run target-checkout checks for the applied task.",
-      prompt: `Verify ${task.slug} on the target branch: run the relevant checks after the applied change and fix any fallout.`,
+      prompt: `Verify ${task.slug} on the target branch after applying: run the relevant linters, tests, and checks for the changed files, confirm there are no regressions or broken integrations, and fix any issues found.`,
     },
     {
       title: "Polish follow-through",
       detail: "Clean docs, UX copy, edge cases, and nearby cleanup.",
-      prompt: `Polish the applied ${task.slug} work: review docs, UX copy, edge cases, and nearby cleanup that builds on the change.`,
+      prompt: `Polish the work from ${task.slug}: review the applied change for missing documentation, unclear error messages, edge cases not handled, or nearby code that would benefit from cleanup. Make any small improvements that build on the change without introducing new scope.`,
     },
   ];
 }
