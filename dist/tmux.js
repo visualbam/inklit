@@ -131,6 +131,8 @@ export async function openFloat(slug) {
             "new-pane",
             "--floating",
             "--close-on-exit",
+            "--width", "90%",
+            "--height", "90%",
             "--",
             "tmux",
             "-L",

@@ -154,6 +154,8 @@ export async function openFloat(slug: string): Promise<string | null> {
         "new-pane",
         "--floating",
         "--close-on-exit",
+        "--width", "90%",
+        "--height", "90%",
         "--",
         "tmux",
         "-L",
