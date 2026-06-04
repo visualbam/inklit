@@ -54,6 +54,8 @@ test("commandRows mutes destructive actions for applied tasks", () => {
     ]
   );
   assert.equal(rows.find((row) => row.key === "z")?.label, "hide archived tasks");
+  assert.equal(rows.some((row) => row.key === "T / 1"), false);
+  assert.equal(rows.some((row) => row.key === "2"), false);
 });
 
 test("commandRows treats merging tasks as background apply jobs", () => {

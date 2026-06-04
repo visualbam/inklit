@@ -25,7 +25,7 @@ export function GoalDecomposePrompt({ onSpawnAll, onCancel, width }) {
             const files = await listRepoFiles();
             const tasks = await decomposeGoal(trimmed, files, process.cwd());
             if (tasks.length === 0)
-                throw new Error("Claude returned no subtasks");
+                throw new Error("AI provider returned no subtasks");
             setSubtasks(tasks);
             setSelectedIdx(0);
             setStep("review");
@@ -85,8 +85,8 @@ export function GoalDecomposePrompt({ onSpawnAll, onCancel, width }) {
     }, { isActive: step !== "input" });
     if (step === "loading") {
         return (React.createElement(Box, { borderStyle: "round", borderColor: UI.accent, paddingX: 1, flexDirection: "column" },
-            React.createElement(Text, { bold: true, color: UI.accent }, "Decomposing goal with Claude\u2026"),
-            React.createElement(Text, { dimColor: true }, "Asking Claude to break your goal into parallel subtasks.")));
+            React.createElement(Text, { bold: true, color: UI.accent }, "Decomposing goal with AI\u2026"),
+            React.createElement(Text, { dimColor: true }, "Asking the configured AI provider to break your goal into parallel subtasks.")));
     }
     if (step === "review") {
         return (React.createElement(Box, { borderStyle: "round", borderColor: UI.accent, paddingX: 1, flexDirection: "column" },
@@ -118,7 +118,7 @@ export function GoalDecomposePrompt({ onSpawnAll, onCancel, width }) {
     // Input step
     return (React.createElement(Box, { borderStyle: "round", borderColor: UI.accent, paddingX: 1, flexDirection: "column" },
         React.createElement(Text, { bold: true, color: UI.accent }, "Decompose goal into parallel tasks"),
-        React.createElement(Text, { dimColor: true }, "Enter a high-level goal. Claude will break it into 3-5 subtasks."),
+        React.createElement(Text, { dimColor: true }, "Enter a high-level goal. AI will break it into 3-5 subtasks."),
         error ? React.createElement(Text, { color: UI.danger }, error) : null,
         React.createElement(Box, { marginTop: 1 },
             React.createElement(Text, { color: UI.accent }, ">  "),

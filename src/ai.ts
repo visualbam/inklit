@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execa } from "execa";
 import type { Task, SuggestedFollowUp } from "./model.js";
@@ -10,12 +11,135 @@ export class AiError extends Error {
   }
 }
 
-async function claudeQuery(prompt: string): Promise<string> {
-  const { stdout, stderr } = await execa("claude", ["-p", prompt], {
-    reject: false,
-    timeout: 60_000,
-  });
-  if (!stdout && stderr) throw new AiError(`claude -p failed: ${stderr.slice(0, 200)}`);
+const DEFAULT_CODEX_MODEL = "gpt-5.4-mini";
+
+type AiProvider = "codex" | "claude";
+type JsonSchema = Record<string, unknown>;
+
+interface AiQueryOptions {
+  schema?: JsonSchema;
+  timeoutMs?: number;
+}
+
+const FOLLOW_UPS_SCHEMA: JsonSchema = {
+  type: "array",
+  minItems: 3,
+  maxItems: 3,
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "detail", "prompt"],
+    properties: {
+      title: { type: "string" },
+      detail: { type: "string" },
+      prompt: { type: "string" },
+    },
+  },
+};
+
+const SUBTASKS_SCHEMA: JsonSchema = {
+  type: "array",
+  minItems: 3,
+  maxItems: 5,
+  items: { type: "string" },
+};
+
+function configuredProvider(): AiProvider {
+  const raw = process.env.INKLIT_AI_PROVIDER?.trim().toLowerCase();
+  if (!raw || raw === "claude") return "claude";
+  if (raw === "codex") return "codex";
+  throw new AiError("INKLIT_AI_PROVIDER must be claude or codex");
+}
+
+function codexModel(): string {
+  return process.env.INKLIT_CODEX_MODEL?.trim() || DEFAULT_CODEX_MODEL;
+}
+
+async function aiQuery(prompt: string, options: AiQueryOptions = {}): Promise<string> {
+  return configuredProvider() === "claude"
+    ? claudeQuery(prompt, options)
+    : codexQuery(prompt, options);
+}
+
+async function codexQuery(prompt: string, options: AiQueryOptions = {}): Promise<string> {
+  const outputDir = await fs.mkdtemp(join(tmpdir(), "inklit-codex-"));
+  const outputPath = join(outputDir, "last-message.txt");
+  const schemaPath = options.schema ? join(outputDir, "schema.json") : null;
+  try {
+    if (schemaPath) {
+      await fs.writeFile(schemaPath, JSON.stringify(options.schema), "utf-8");
+    }
+    const args = [
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "--ignore-rules",
+      "--sandbox",
+      "read-only",
+      "--model",
+      codexModel(),
+      "--color",
+      "never",
+      "--output-last-message",
+      outputPath,
+    ];
+    if (schemaPath) args.push("--output-schema", schemaPath);
+    args.push("-");
+
+    const { stdout, stderr, exitCode } = await execa(
+      "codex",
+      args,
+      {
+        input: prompt,
+        reject: false,
+        timeout: options.timeoutMs ?? 90_000,
+        forceKillAfterDelay: 3_000,
+      }
+    );
+    if (exitCode !== 0) {
+      const detail = stderr || stdout || `exit code ${exitCode}`;
+      throw new AiError(`codex exec failed: ${detail.slice(0, 200)}`);
+    }
+    const saved = await fs.readFile(outputPath, "utf-8").catch(() => "");
+    const output = saved.trim() || stdout.trim();
+    if (!output) throw new AiError("codex exec returned no output");
+    return output;
+  } catch (err) {
+    if (err instanceof AiError) throw err;
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AiError(`codex exec failed: ${detail.slice(0, 200)}`);
+  } finally {
+    await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// Tools are disabled so `claude -p` runs as a plain completion instead of a
+// full agentic session that explores the repo. This is kept as an explicit
+// fallback for users who prefer Claude subscription auth.
+const AI_DISALLOWED_TOOLS = "Bash Read Edit Write Glob Grep WebFetch WebSearch Task";
+
+async function claudeQuery(prompt: string, options: AiQueryOptions = {}): Promise<string> {
+  // Pipe the prompt through stdin rather than as an argv positional: passing it
+  // as an arg makes claude wait ~3s for (never-arriving) stdin before falling
+  // back to the arg, while passing empty stdin makes it error out entirely.
+  const { stdout, stderr, exitCode } = await execa(
+    "claude",
+    ["-p", "--model", "claude-haiku-4-5", "--disallowedTools", AI_DISALLOWED_TOOLS],
+    {
+      input: prompt,
+      reject: false,
+      timeout: options.timeoutMs ?? 30_000,
+      forceKillAfterDelay: 3_000,
+    }
+  );
+  if (exitCode !== 0) {
+    const detail = stderr || stdout || `exit code ${exitCode}`;
+    throw new AiError(`claude -p failed: ${detail.slice(0, 200)}`);
+  }
+  if (!stdout) throw new AiError("claude -p returned no output");
+  if (stdout.startsWith("Error:")) throw new AiError(stdout.slice(0, 200));
   return stdout;
 }
 
@@ -30,11 +154,11 @@ function extractJson<T>(raw: string): T {
   } else if (startBrace !== -1) {
     start = startBrace;
   }
-  if (start === -1) throw new AiError("No JSON found in claude output");
+  if (start === -1) throw new AiError("No JSON found in AI provider output");
   const lastBracket = text.lastIndexOf("]");
   const lastBrace = text.lastIndexOf("}");
   const end = Math.max(lastBracket, lastBrace);
-  if (end <= start) throw new AiError("Malformed JSON in claude output");
+  if (end <= start) throw new AiError("Malformed JSON in AI provider output");
   return JSON.parse(text.slice(start, end + 1)) as T;
 }
 
@@ -78,8 +202,8 @@ async function readProjectContext(cwd: string): Promise<string> {
 }
 
 /**
- * Call Claude to suggest 3 follow-up tasks based on what was just applied.
- * Uses `claude -p` (non-interactive) with the existing subscription auth.
+ * Suggest 3 follow-up tasks based on what was just applied.
+ * Uses subscription-auth CLI providers, defaulting to Codex with gpt-5.4-mini.
  * Injects error context at the end (decision-time guidance) if the task failed.
  */
 export async function fetchAiFollowUps(
@@ -107,7 +231,7 @@ ${projectSection}${summarySection}
 Diff of the merged change:
 ${diffSnippet}
 
-Analyze the merged change and generate exactly 3 high-quality follow-up task suggestions.
+Analyze the merged change and generate exactly 3 high-quality follow-up task suggestions about how this specific merged work should be improved, elaborated, integrated, or made safer.
 
 For each suggestion, think step-by-step through these dimensions before writing it:
 1. Strategic value — does this directly advance the core goal?
@@ -121,6 +245,8 @@ Composition rules:
 - At least one task should extend or build on the merged work (a natural next feature or improvement)
 - One may be cleanup/debt reduction if it is truly high-leverage right now
 - Be specific and concrete — never vague suggestions like "improve performance" or "add tests"; name the specific files, functions, or behaviors from the diff
+- Every title, detail, and prompt must be grounded in concrete changed files or behaviors from the diff
+- Do not return generic suggestions like "Verify applied work", "Polish follow-through", or "Run checks" unless the task names the exact behavior and file(s) to verify or polish
 - Each task's "prompt" field is passed directly to an AI coding agent — write it as a self-contained instruction with enough context for the agent to act immediately, without follow-up questions
 - Never suggest tasks already captured in the previously completed tasks list above
 
@@ -135,9 +261,9 @@ Return ONLY a JSON array with no other text:
     prompt += "\n" + errorSection;
   }
 
-  const raw = await claudeQuery(prompt);
+  const raw = await aiQuery(prompt, { schema: FOLLOW_UPS_SCHEMA, timeoutMs: 90_000 });
   const parsed = extractJson<SuggestedFollowUp[]>(raw);
-  if (!Array.isArray(parsed)) throw new AiError("Expected array from claude");
+  if (!Array.isArray(parsed)) throw new AiError("Expected array from AI provider");
   return parsed
     .filter((s) => s && typeof s.title === "string" && typeof s.prompt === "string")
     .slice(0, 3)
@@ -149,7 +275,7 @@ Return ONLY a JSON array with no other text:
 }
 
 /**
- * Call Claude to decompose a high-level goal into 3-5 parallel subtasks.
+ * Decompose a high-level goal into 3-5 parallel subtasks.
  * Returns an array of task description strings ready to spawn.
  * Uses the same strategic reasoning framework as fetchAiFollowUps.
  */
@@ -193,9 +319,9 @@ Composition rules:
 Return ONLY a JSON array of full task description strings with no other text:
 ["Full description of subtask 1 for an AI agent", "Full description of subtask 2", ...]`;
 
-  const raw = await claudeQuery(prompt);
+  const raw = await aiQuery(prompt, { schema: SUBTASKS_SCHEMA, timeoutMs: 90_000 });
   const parsed = extractJson<string[]>(raw);
-  if (!Array.isArray(parsed)) throw new AiError("Expected array from claude");
+  if (!Array.isArray(parsed)) throw new AiError("Expected array from AI provider");
   return parsed
     .filter((s) => typeof s === "string" && s.trim())
     .slice(0, 5)
@@ -203,7 +329,7 @@ Return ONLY a JSON array of full task description strings with no other text:
 }
 
 /**
- * Call Claude to generate a concise kebab-case slug (3-5 words, ≤30 chars)
+ * Generate a concise kebab-case slug (3-5 words, ≤30 chars)
  * summarizing the task description. Throws on failure so callers can fall back.
  */
 export async function generateSlug(description: string): Promise<string> {
@@ -211,7 +337,7 @@ export async function generateSlug(description: string): Promise<string> {
 
 Task: "${description}"`;
 
-  const raw = await claudeQuery(prompt);
+  const raw = await aiQuery(prompt);
   const slug = raw
     .trim()
     .toLowerCase()
@@ -219,6 +345,6 @@ Task: "${description}"`;
     .replace(/^-+|-+$/g, "")
     .slice(0, 30)
     .replace(/-+$/g, "");
-  if (!slug) throw new AiError("Empty slug from claude");
+  if (!slug) throw new AiError("Empty slug from AI provider");
   return slug;
 }

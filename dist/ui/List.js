@@ -5,6 +5,12 @@ import { STATE_ICON, STATE_COLOR, LIFECYCLE_LABEL, LIFECYCLE_COLOR, formatStateL
 import { UI } from "./theme.js";
 import { ReviewBadges, reviewSummary } from "./review.js";
 import { truncate } from "./text.js";
+const DETAIL_LEADING_COL = 4;
+const DETAIL_STAGE_COL = 8;
+const DETAIL_PANE_COL = 9;
+const DETAIL_REVIEW_COL = 18;
+const DETAIL_OVERLAP_COL = 2;
+const DETAIL_COLUMN_GAP = 3;
 export function TaskList({ tasks, selectedSlug, totalTasks, filterQuery, density, width, height, overlaps, }) {
     if (tasks.length === 0) {
         return React.createElement(EmptyBoard, { filterQuery: filterQuery, totalTasks: totalTasks });
@@ -103,30 +109,35 @@ function taskListLineCountForSlice({ tasks, totalTasks, matchedTaskCount, filter
         return filterFooter + hiddenMarkers;
     const groupCount = countGroups(tasks);
     const itemLines = density === "compact" ? tasks.length * 2 : tasks.length;
-    const headerLines = density === "compact" ? 0 : 2;
+    const headerLines = density === "compact" ? 0 : 3;
     return headerLines + groupCount + itemLines + filterFooter + hiddenMarkers;
 }
 function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, overlaps, }) {
-    // Reserve roughly: rail+icon + stage + pane + age + review + spacing.
-    const reviewCol = 18;
-    const fixed = 55 + reviewCol;
-    const slugCol = Math.max(10, width - fixed - 2);
+    const contentWidth = Math.max(0, width - 2);
+    const fixed = DETAIL_LEADING_COL +
+        DETAIL_STAGE_COL +
+        DETAIL_PANE_COL +
+        DETAIL_REVIEW_COL +
+        DETAIL_OVERLAP_COL +
+        DETAIL_COLUMN_GAP * 4;
+    const slugCol = Math.max(10, contentWidth - fixed);
+    const gap = " ".repeat(DETAIL_COLUMN_GAP);
+    const divider = "─".repeat(Math.max(0, width - 2));
     const rule = "╌".repeat(Math.max(0, width - 2));
     let currentGroup = null;
     return (React.createElement(Box, { flexDirection: "column" },
         React.createElement(Box, { paddingX: 1 },
+            React.createElement(Text, { dimColor: true }, divider)),
+        React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { dimColor: true },
-                "    ",
+                pad("", DETAIL_LEADING_COL),
                 pad("TASK", slugCol),
-                " ",
-                pad("STAGE", 8),
-                " ",
-                pad("PANE", 9),
-                " ",
-                pad("REVIEW", reviewCol),
-                " ",
-                "  ",
-                pad("AGE", 5))),
+                gap,
+                pad("STAGE", DETAIL_STAGE_COL),
+                gap,
+                pad("PANE", DETAIL_PANE_COL),
+                gap,
+                pad("REVIEW", DETAIL_REVIEW_COL))),
         React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { dimColor: true }, rule)),
         hiddenAbove > 0 ? React.createElement(HiddenMarker, { count: hiddenAbove, direction: "above" }) : null,
@@ -134,34 +145,9 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
             const group = groupForTask(t);
             const showGroup = group.key !== currentGroup;
             currentGroup = group.key;
-            const sel = t.slug === selectedSlug;
-            const icon = STATE_ICON[t.state];
-            const color = STATE_COLOR[t.state];
-            const stateLabel = formatStateLabel(t);
-            const lifecycle = lifecycleForTask(t);
-            const lifecycleLabel = LIFECYCLE_LABEL[lifecycle];
-            const lifecycleColor = LIFECYCLE_COLOR[lifecycle];
             return (React.createElement(React.Fragment, { key: t.slug },
                 showGroup ? React.createElement(GroupHeader, { group: group }) : null,
-                React.createElement(Box, { paddingX: 1 },
-                    React.createElement(Text, null,
-                        React.createElement(Text, { color: sel ? UI.accent : UI.subtle }, sel ? "▌" : " "),
-                        React.createElement(Text, null, " "),
-                        React.createElement(Text, { bold: sel, color: color }, icon),
-                        React.createElement(Text, null, " "),
-                        React.createElement(Text, { bold: sel },
-                            pad(t.error ?? t.slug, slugCol),
-                            " "),
-                        React.createElement(Text, { bold: sel, color: lifecycleColor }, pad(lifecycleLabel, 8)),
-                        React.createElement(Text, null, " "),
-                        React.createElement(Text, { bold: sel, color: color }, pad(stateLabel, 9)),
-                        React.createElement(Text, null, " "),
-                        React.createElement(Text, { bold: sel },
-                            React.createElement(ReviewBadges, { task: t, maxWidth: reviewCol }),
-                            pad("", Math.max(0, reviewCol - reviewSummary(t).length))),
-                        React.createElement(Text, null, " "),
-                        React.createElement(Text, { color: overlaps?.has(t.slug) ? "yellow" : undefined }, overlaps?.has(t.slug) ? "⚠ " : "  "),
-                        React.createElement(Text, { bold: sel, dimColor: !sel }, pad(formatAge(t.ageSeconds), 5))))));
+                React.createElement(DetailedTaskRow, { task: t, selectedSlug: selectedSlug, slugCol: slugCol, overlaps: overlaps })));
         }),
         hiddenBelow > 0 ? React.createElement(HiddenMarker, { count: hiddenBelow, direction: "below" }) : null,
         filterQuery.trim() && matchedTaskCount < totalTasks ? (React.createElement(Box, { paddingX: 1 },
@@ -171,6 +157,33 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
                 "/",
                 totalTasks,
                 " \u00B7 clear filter with /"))) : null));
+}
+function DetailedTaskRow({ task: t, selectedSlug, slugCol, overlaps, }) {
+    const sel = t.slug === selectedSlug;
+    const icon = STATE_ICON[t.state];
+    const color = STATE_COLOR[t.state];
+    const stateLabel = formatStateLabel(t);
+    const lifecycle = lifecycleForTask(t);
+    const lifecycleLabel = LIFECYCLE_LABEL[lifecycle];
+    const lifecycleColor = LIFECYCLE_COLOR[lifecycle];
+    const gap = " ".repeat(DETAIL_COLUMN_GAP);
+    return (React.createElement(Box, { paddingX: 1 },
+        React.createElement(Text, null,
+            React.createElement(Text, { color: sel ? UI.accent : UI.subtle }, sel ? "▌" : " "),
+            React.createElement(Text, null, " "),
+            React.createElement(Text, { bold: sel, color: color }, icon),
+            React.createElement(Text, null, " "),
+            React.createElement(Text, { bold: sel }, pad(t.error ?? t.slug, slugCol)),
+            React.createElement(Text, null, gap),
+            React.createElement(Text, { bold: sel, color: lifecycleColor }, pad(lifecycleLabel, DETAIL_STAGE_COL)),
+            React.createElement(Text, null, gap),
+            React.createElement(Text, { bold: sel, color: color }, pad(stateLabel, DETAIL_PANE_COL)),
+            React.createElement(Text, null, gap),
+            React.createElement(Text, { bold: sel },
+                React.createElement(ReviewBadges, { task: t, maxWidth: DETAIL_REVIEW_COL }),
+                pad("", Math.max(0, DETAIL_REVIEW_COL - reviewSummary(t).length))),
+            React.createElement(Text, null, gap),
+            React.createElement(Text, { color: overlaps?.has(t.slug) ? "yellow" : undefined }, overlaps?.has(t.slug) ? "⚠ " : pad("", DETAIL_OVERLAP_COL)))));
 }
 function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, overlaps, }) {
     let currentGroup = null;
@@ -180,28 +193,9 @@ function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matched
             const group = groupForTask(t);
             const showGroup = group.key !== currentGroup;
             currentGroup = group.key;
-            const sel = t.slug === selectedSlug;
-            const color = STATE_COLOR[t.state];
-            const lifecycle = lifecycleForTask(t);
-            const meta = `${LIFECYCLE_LABEL[lifecycle]} · ${formatStateLabel(t)} · ${formatAge(t.ageSeconds)}`;
             return (React.createElement(React.Fragment, { key: t.slug },
                 showGroup ? React.createElement(GroupHeader, { group: group }) : null,
-                React.createElement(Box, { paddingX: 1 },
-                    React.createElement(Text, null,
-                        React.createElement(Text, { color: sel ? UI.accent : UI.subtle }, sel ? "▌" : " "),
-                        React.createElement(Text, null, " "),
-                        React.createElement(Text, { bold: sel, color: color }, STATE_ICON[t.state]),
-                        React.createElement(Text, null, " "),
-                        React.createElement(Text, { bold: sel }, truncate(t.error ?? t.slug, Math.max(18, width - 28))))),
-                React.createElement(Box, { paddingX: 1 },
-                    React.createElement(Text, null,
-                        React.createElement(Text, { color: sel ? UI.accent : UI.subtle }, " "),
-                        React.createElement(Text, { dimColor: true },
-                            "   ",
-                            truncate(meta, 28),
-                            " \u00B7 "),
-                        React.createElement(ReviewBadges, { task: t, maxWidth: Math.max(12, width - 38) }),
-                        overlaps?.has(t.slug) ? React.createElement(Text, { color: "yellow" }, " \u26A0") : null))));
+                React.createElement(CompactTaskRow, { task: t, selectedSlug: selectedSlug, width: width, overlaps: overlaps })));
         }),
         hiddenBelow > 0 ? React.createElement(HiddenMarker, { count: hiddenBelow, direction: "below" }) : null,
         filterQuery.trim() && matchedTaskCount < totalTasks ? (React.createElement(Box, { paddingX: 1 },
@@ -211,6 +205,29 @@ function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matched
                 "/",
                 totalTasks,
                 " \u00B7 clear filter with /"))) : null));
+}
+function CompactTaskRow({ task: t, selectedSlug, width, overlaps, }) {
+    const sel = t.slug === selectedSlug;
+    const color = STATE_COLOR[t.state];
+    const lifecycle = lifecycleForTask(t);
+    const meta = `${LIFECYCLE_LABEL[lifecycle]} · ${formatStateLabel(t)} · ${formatAge(t.ageSeconds)}`;
+    return (React.createElement(React.Fragment, null,
+        React.createElement(Box, { paddingX: 1 },
+            React.createElement(Text, null,
+                React.createElement(Text, { color: sel ? UI.accent : UI.subtle }, sel ? "▌" : " "),
+                React.createElement(Text, null, " "),
+                React.createElement(Text, { bold: sel, color: color }, STATE_ICON[t.state]),
+                React.createElement(Text, null, " "),
+                React.createElement(Text, { bold: sel }, truncate(t.error ?? t.slug, Math.max(18, width - 28))))),
+        React.createElement(Box, { paddingX: 1 },
+            React.createElement(Text, null,
+                React.createElement(Text, { color: sel ? UI.accent : UI.subtle }, " "),
+                React.createElement(Text, { dimColor: true },
+                    "   ",
+                    truncate(meta, 28),
+                    " \u00B7 "),
+                React.createElement(ReviewBadges, { task: t, maxWidth: Math.max(12, width - 38) }),
+                overlaps?.has(t.slug) ? React.createElement(Text, { color: "yellow" }, " \u26A0") : null))));
 }
 function HiddenMarker({ count, direction, }) {
     return (React.createElement(Box, { paddingX: 1 },

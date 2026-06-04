@@ -34,7 +34,7 @@ export function GoalDecomposePrompt({ onSpawnAll, onCancel, width }: Props) {
     try {
       const files = await listRepoFiles();
       const tasks = await decomposeGoal(trimmed, files, process.cwd());
-      if (tasks.length === 0) throw new Error("Claude returned no subtasks");
+      if (tasks.length === 0) throw new Error("AI provider returned no subtasks");
       setSubtasks(tasks);
       setSelectedIdx(0);
       setStep("review");
@@ -97,8 +97,8 @@ export function GoalDecomposePrompt({ onSpawnAll, onCancel, width }: Props) {
   if (step === "loading") {
     return (
       <Box borderStyle="round" borderColor={UI.accent} paddingX={1} flexDirection="column">
-        <Text bold color={UI.accent}>Decomposing goal with Claude…</Text>
-        <Text dimColor>Asking Claude to break your goal into parallel subtasks.</Text>
+        <Text bold color={UI.accent}>Decomposing goal with AI…</Text>
+        <Text dimColor>Asking the configured AI provider to break your goal into parallel subtasks.</Text>
       </Box>
     );
   }
@@ -155,7 +155,7 @@ export function GoalDecomposePrompt({ onSpawnAll, onCancel, width }: Props) {
     <Box borderStyle="round" borderColor={UI.accent} paddingX={1} flexDirection="column">
       <Text bold color={UI.accent}>Decompose goal into parallel tasks</Text>
       <Text dimColor>
-        Enter a high-level goal. Claude will break it into 3-5 subtasks.
+        Enter a high-level goal. AI will break it into 3-5 subtasks.
       </Text>
       {error ? <Text color={UI.danger}>{error}</Text> : null}
       <Box marginTop={1}>

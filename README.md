@@ -32,6 +32,11 @@ bunch of features are intentionally stubbed — see the TODO list below.
 You can run inklit outside zellij — the list will render read-only. Spawning
 new tasks and focusing panes both require an active zellij session.
 
+AI-generated follow-up suggestions and goal decomposition default to
+`codex exec --model gpt-5.4-mini`, using your local Codex subscription auth
+rather than an OpenAI API key. Set `INKLIT_CODEX_MODEL=<model>` to change the
+Codex model, or `INKLIT_AI_PROVIDER=claude` to use the Claude CLI provider.
+
 ## Install
 
 ```bash
@@ -165,9 +170,10 @@ receives applied task work. The task list shows two separate concepts:
 - **review** is a readable readiness summary. The underlying counts are changed
   files, commits ahead, and untracked files, rendered as badges such as
   `3 files`, `2 commits`, and `1 untracked`.
-- **suggested next tasks** appear in the task inspector for `ready` and
-  recently applied `done` rows. Press `T`/`1` or `2` to launch one through the
-  normal agent picker.
+- **suggested next tasks** appear in the task inspector for `ready` rows. Press
+  `T`/`1` or `2` to launch one through the normal agent picker. Recently
+  applied `done` rows can show AI-generated follow-up suggestions based on the
+  captured merge diff.
 
 The board is grouped by urgency (`Waiting`, `Running`, `Idle`, `Merging`,
 `Ready`, `Failed`, `Done`, then archived rows when visible). Press `v` to
@@ -228,7 +234,7 @@ src/
     FilterPrompt.tsx task board filter prompt
     CommandPalette.tsx task/view action menu
     HelpOverlay.tsx keybind reference
-    followUps.ts    deterministic suggested next tasks
+    followUps.ts    deterministic pre-apply suggested next tasks
     review.tsx     review-readiness badge helpers
     theme.ts       terminal-safe ANSI color tokens
     icons.ts       state → icon/color/label

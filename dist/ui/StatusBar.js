@@ -42,7 +42,7 @@ function nextAction(task, inSession) {
     if (task.failure)
         return "Next: inspect merge failure or press m to retry";
     if (task.state === "merged")
-        return "Next: T follow-up or let it fade out";
+        return "Next: let it fade out or archive";
     return "Next: inspect task";
 }
 //# sourceMappingURL=StatusBar.js.map

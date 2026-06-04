@@ -22,6 +22,7 @@ export const initialState = {
     taskOverlaps: new Map(),
     pendingAgentKind: null,
     aiFollowUps: [],
+    aiFollowUpSlug: "",
     aiFollowUpSelectedIndex: 0,
 };
 export function lifecycleForState(state) {

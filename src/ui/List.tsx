@@ -14,6 +14,13 @@ import { UI } from "./theme.js";
 import { ReviewBadges, reviewSummary } from "./review.js";
 import { truncate } from "./text.js";
 
+const DETAIL_LEADING_COL = 4;
+const DETAIL_STAGE_COL = 8;
+const DETAIL_PANE_COL = 9;
+const DETAIL_REVIEW_COL = 18;
+const DETAIL_OVERLAP_COL = 2;
+const DETAIL_COLUMN_GAP = 3;
+
 interface Props {
   tasks: Task[];
   selectedSlug: string | null;
@@ -214,7 +221,7 @@ function taskListLineCountForSlice({
   if (tasks.length === 0) return filterFooter + hiddenMarkers;
   const groupCount = countGroups(tasks);
   const itemLines = density === "compact" ? tasks.length * 2 : tasks.length;
-  const headerLines = density === "compact" ? 0 : 2;
+  const headerLines = density === "compact" ? 0 : 3;
   return headerLines + groupCount + itemLines + filterFooter + hiddenMarkers;
 }
 
@@ -234,18 +241,35 @@ function DetailedTaskList({
   hiddenAbove: number;
   hiddenBelow: number;
 }) {
-  // Reserve roughly: rail+icon + stage + pane + age + review + spacing.
-  const reviewCol = 18;
-  const fixed = 55 + reviewCol;
-  const slugCol = Math.max(10, width - fixed - 2);
+  const contentWidth = Math.max(0, width - 2);
+  const fixed =
+    DETAIL_LEADING_COL +
+    DETAIL_STAGE_COL +
+    DETAIL_PANE_COL +
+    DETAIL_REVIEW_COL +
+    DETAIL_OVERLAP_COL +
+    DETAIL_COLUMN_GAP * 4;
+  const slugCol = Math.max(10, contentWidth - fixed);
+  const gap = " ".repeat(DETAIL_COLUMN_GAP);
+  const divider = "─".repeat(Math.max(0, width - 2));
   const rule = "╌".repeat(Math.max(0, width - 2));
   let currentGroup: string | null = null;
 
   return (
     <Box flexDirection="column">
       <Box paddingX={1}>
+        <Text dimColor>{divider}</Text>
+      </Box>
+      <Box paddingX={1}>
         <Text dimColor>
-          {"    "}{pad("TASK", slugCol)}{" "}{pad("STAGE", 8)}{" "}{pad("PANE", 9)}{" "}{pad("REVIEW", reviewCol)}{" "}{"  "}{pad("AGE", 5)}
+          {pad("", DETAIL_LEADING_COL)}
+          {pad("TASK", slugCol)}
+          {gap}
+          {pad("STAGE", DETAIL_STAGE_COL)}
+          {gap}
+          {pad("PANE", DETAIL_PANE_COL)}
+          {gap}
+          {pad("REVIEW", DETAIL_REVIEW_COL)}
         </Text>
       </Box>
       <Box paddingX={1}>
@@ -256,50 +280,15 @@ function DetailedTaskList({
         const group = groupForTask(t);
         const showGroup = group.key !== currentGroup;
         currentGroup = group.key;
-        const sel = t.slug === selectedSlug;
-        const icon = STATE_ICON[t.state];
-        const color = STATE_COLOR[t.state];
-        const stateLabel = formatStateLabel(t);
-        const lifecycle = lifecycleForTask(t);
-        const lifecycleLabel = LIFECYCLE_LABEL[lifecycle];
-        const lifecycleColor = LIFECYCLE_COLOR[lifecycle];
         return (
           <React.Fragment key={t.slug}>
             {showGroup ? <GroupHeader group={group} /> : null}
-            <Box paddingX={1}>
-              <Text>
-                <Text color={sel ? UI.accent : UI.subtle}>
-                  {sel ? "▌" : " "}
-                </Text>
-                <Text> </Text>
-                <Text bold={sel} color={color}>
-                  {icon}
-                </Text>
-                <Text> </Text>
-                <Text bold={sel}>
-                  {pad(t.error ?? t.slug, slugCol)}{" "}
-                </Text>
-                <Text bold={sel} color={lifecycleColor}>
-                  {pad(lifecycleLabel, 8)}
-                </Text>
-                <Text> </Text>
-                <Text bold={sel} color={color}>
-                  {pad(stateLabel, 9)}
-                </Text>
-                <Text> </Text>
-                <Text bold={sel}>
-                  <ReviewBadges task={t} maxWidth={reviewCol} />
-                  {pad("", Math.max(0, reviewCol - reviewSummary(t).length))}
-                </Text>
-                <Text> </Text>
-                <Text color={overlaps?.has(t.slug) ? "yellow" : undefined}>
-                  {overlaps?.has(t.slug) ? "⚠ " : "  "}
-                </Text>
-                <Text bold={sel} dimColor={!sel}>
-                  {pad(formatAge(t.ageSeconds), 5)}
-                </Text>
-              </Text>
-            </Box>
+            <DetailedTaskRow
+              task={t}
+              selectedSlug={selectedSlug}
+              slugCol={slugCol}
+              overlaps={overlaps}
+            />
           </React.Fragment>
         );
       })}
@@ -311,6 +300,55 @@ function DetailedTaskList({
           </Text>
         </Box>
       ) : null}
+    </Box>
+  );
+}
+
+function DetailedTaskRow({
+  task: t,
+  selectedSlug,
+  slugCol,
+  overlaps,
+}: {
+  task: Task;
+  selectedSlug: string | null;
+  slugCol: number;
+  overlaps?: Map<string, string[]>;
+}) {
+  const sel = t.slug === selectedSlug;
+  const icon = STATE_ICON[t.state];
+  const color = STATE_COLOR[t.state];
+  const stateLabel = formatStateLabel(t);
+  const lifecycle = lifecycleForTask(t);
+  const lifecycleLabel = LIFECYCLE_LABEL[lifecycle];
+  const lifecycleColor = LIFECYCLE_COLOR[lifecycle];
+  const gap = " ".repeat(DETAIL_COLUMN_GAP);
+  return (
+    <Box paddingX={1}>
+      <Text>
+        <Text color={sel ? UI.accent : UI.subtle}>{sel ? "▌" : " "}</Text>
+        <Text> </Text>
+        <Text bold={sel} color={color}>{icon}</Text>
+        <Text> </Text>
+        <Text bold={sel}>{pad(t.error ?? t.slug, slugCol)}</Text>
+        <Text>{gap}</Text>
+        <Text bold={sel} color={lifecycleColor}>
+          {pad(lifecycleLabel, DETAIL_STAGE_COL)}
+        </Text>
+        <Text>{gap}</Text>
+        <Text bold={sel} color={color}>
+          {pad(stateLabel, DETAIL_PANE_COL)}
+        </Text>
+        <Text>{gap}</Text>
+        <Text bold={sel}>
+          <ReviewBadges task={t} maxWidth={DETAIL_REVIEW_COL} />
+          {pad("", Math.max(0, DETAIL_REVIEW_COL - reviewSummary(t).length))}
+        </Text>
+        <Text>{gap}</Text>
+        <Text color={overlaps?.has(t.slug) ? "yellow" : undefined}>
+          {overlaps?.has(t.slug) ? "⚠ " : pad("", DETAIL_OVERLAP_COL)}
+        </Text>
+      </Text>
     </Box>
   );
 }
@@ -339,32 +377,10 @@ function CompactTaskList({
         const group = groupForTask(t);
         const showGroup = group.key !== currentGroup;
         currentGroup = group.key;
-        const sel = t.slug === selectedSlug;
-        const color = STATE_COLOR[t.state];
-        const lifecycle = lifecycleForTask(t);
-        const meta = `${LIFECYCLE_LABEL[lifecycle]} · ${formatStateLabel(t)} · ${formatAge(t.ageSeconds)}`;
         return (
           <React.Fragment key={t.slug}>
             {showGroup ? <GroupHeader group={group} /> : null}
-            <Box paddingX={1}>
-              <Text>
-                <Text color={sel ? UI.accent : UI.subtle}>{sel ? "▌" : " "}</Text>
-                <Text> </Text>
-                <Text bold={sel} color={color}>
-                  {STATE_ICON[t.state]}
-                </Text>
-                <Text> </Text>
-                <Text bold={sel}>{truncate(t.error ?? t.slug, Math.max(18, width - 28))}</Text>
-              </Text>
-            </Box>
-            <Box paddingX={1}>
-              <Text>
-                <Text color={sel ? UI.accent : UI.subtle}> </Text>
-                <Text dimColor>   {truncate(meta, 28)} · </Text>
-                <ReviewBadges task={t} maxWidth={Math.max(12, width - 38)} />
-                {overlaps?.has(t.slug) ? <Text color="yellow"> ⚠</Text> : null}
-              </Text>
-            </Box>
+            <CompactTaskRow task={t} selectedSlug={selectedSlug} width={width} overlaps={overlaps} />
           </React.Fragment>
         );
       })}
@@ -377,6 +393,44 @@ function CompactTaskList({
         </Box>
       ) : null}
     </Box>
+  );
+}
+
+function CompactTaskRow({
+  task: t,
+  selectedSlug,
+  width,
+  overlaps,
+}: {
+  task: Task;
+  selectedSlug: string | null;
+  width: number;
+  overlaps?: Map<string, string[]>;
+}) {
+  const sel = t.slug === selectedSlug;
+  const color = STATE_COLOR[t.state];
+  const lifecycle = lifecycleForTask(t);
+  const meta = `${LIFECYCLE_LABEL[lifecycle]} · ${formatStateLabel(t)} · ${formatAge(t.ageSeconds)}`;
+  return (
+    <>
+      <Box paddingX={1}>
+        <Text>
+          <Text color={sel ? UI.accent : UI.subtle}>{sel ? "▌" : " "}</Text>
+          <Text> </Text>
+          <Text bold={sel} color={color}>{STATE_ICON[t.state]}</Text>
+          <Text> </Text>
+          <Text bold={sel}>{truncate(t.error ?? t.slug, Math.max(18, width - 28))}</Text>
+        </Text>
+      </Box>
+      <Box paddingX={1}>
+        <Text>
+          <Text color={sel ? UI.accent : UI.subtle}> </Text>
+          <Text dimColor>   {truncate(meta, 28)} · </Text>
+          <ReviewBadges task={t} maxWidth={Math.max(12, width - 38)} />
+          {overlaps?.has(t.slug) ? <Text color="yellow"> ⚠</Text> : null}
+        </Text>
+      </Box>
+    </>
   );
 }
 

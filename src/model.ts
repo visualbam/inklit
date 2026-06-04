@@ -195,6 +195,8 @@ export interface AppState {
   pendingAgentKind: AgentKind | null;
   /** AI-suggested follow-up tasks after a merge. */
   aiFollowUps: SuggestedFollowUp[];
+  /** Slug of the task these follow-ups were generated for. */
+  aiFollowUpSlug: string;
   /** Selected index in the aiFollowUpPicker overlay. */
   aiFollowUpSelectedIndex: number;
 }
@@ -229,6 +231,7 @@ export const initialState: AppState = {
   taskOverlaps: new Map(),
   pendingAgentKind: null,
   aiFollowUps: [],
+  aiFollowUpSlug: "",
   aiFollowUpSelectedIndex: 0,
 };
 

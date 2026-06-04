@@ -17,7 +17,7 @@ import { HelpOverlay } from "./HelpOverlay.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { agentTranscriptTail } from "./agentTranscript.js";
 import { UI } from "./theme.js";
-import { suggestedFollowUps } from "./followUps.js";
+import { activeFollowUps, mergedFallbackFollowUps, suggestedFollowUps, } from "./followUps.js";
 import { AiFollowUpOverlay } from "./AiFollowUpOverlay.js";
 import { GoalDecomposePrompt } from "./GoalDecomposePrompt.js";
 import { listProject, gitDiff, gitFiles, gitLog, gitReviewStats, gitChangedFileNames, detectPermissionRequest, detectWaiting, mergeToMain, syncFromMain, removeWorktree, } from "../wt.js";
@@ -475,10 +475,16 @@ function reducer(s, a) {
             return { ...s, pendingChord: a.key };
         case "overlaps/computed":
             return { ...s, taskOverlaps: a.overlaps };
-        case "mode/aiFollowUpLoading":
-            return { ...s, mode: "aiFollowUpLoading", aiFollowUps: [], aiFollowUpSelectedIndex: 0 };
         case "aiFollowUp/loaded":
-            return { ...s, mode: "aiFollowUpPicker", aiFollowUps: a.followUps, aiFollowUpSelectedIndex: 0 };
+            return { ...s, mode: "aiFollowUpPicker", aiFollowUps: a.followUps, aiFollowUpSlug: a.slug, aiFollowUpSelectedIndex: 0 };
+        case "aiFollowUp/upgraded":
+            if (s.mode !== "aiFollowUpPicker" || s.aiFollowUpSlug !== a.slug)
+                return s;
+            return {
+                ...s,
+                aiFollowUps: a.followUps,
+                aiFollowUpSelectedIndex: Math.min(s.aiFollowUpSelectedIndex, a.followUps.length - 1),
+            };
         case "aiFollowUp/selectNext":
             return { ...s, aiFollowUpSelectedIndex: Math.min(s.aiFollowUps.length - 1, s.aiFollowUpSelectedIndex + 1) };
         case "aiFollowUp/selectPrev":
@@ -653,6 +659,8 @@ export function App({ mainBranch = "main" }) {
     const preGenStartedRef = useRef(new Set());
     /** Cached pre-generated follow-up promises, keyed by slug. */
     const preGenFollowUpsRef = useRef(new Map());
+    /** Diff captured at pre-gen start (before merge), used as fallback if the AI call fails. */
+    const preGenDiffRef = useRef(new Map());
     /** Re-entrancy guard so repeated Q/y presses don't double-close panes. */
     const closingAllRef = useRef(false);
     // Only one apply job can touch the target checkout at a time.
@@ -884,21 +892,28 @@ export function App({ mainBranch = "main" }) {
                 prevStatesRef.current = nextStates;
                 // Pre-generate AI follow-up suggestions as soon as tasks become ready
                 // so the overlay appears instantly after merge instead of waiting for a
-                // fresh Claude call.
+                // fresh AI call.
                 for (const t of finalTasks) {
                     if (t.state === "ready") {
                         if (!preGenStartedRef.current.has(t.slug) && t.path) {
                             preGenStartedRef.current.add(t.slug);
                             const taskSnapshot = { ...t };
                             preGenFollowUpsRef.current.set(t.slug, gitDiff(taskSnapshot.path, targetBranch, 8000)
-                                .then((diff) => fetchAiFollowUps(taskSnapshot, diff, process.cwd()))
+                                .then((diff) => {
+                                preGenDiffRef.current.set(taskSnapshot.slug, diff);
+                                if (!diff.trim())
+                                    return [];
+                                return fetchAiFollowUps(taskSnapshot, diff, process.cwd());
+                            })
                                 .catch(() => []));
                         }
                     }
-                    else if (preGenStartedRef.current.has(t.slug)) {
-                        // Task left ready state (resumed/archived) — discard stale pre-gen.
+                    else if (preGenStartedRef.current.has(t.slug) && t.state !== "merging") {
+                        // Task left ready state for a reason other than merging — discard stale pre-gen.
+                        // "merging" is excluded: the promise is still needed after merge completes.
                         preGenStartedRef.current.delete(t.slug);
                         preGenFollowUpsRef.current.delete(t.slug);
+                        preGenDiffRef.current.delete(t.slug);
                     }
                 }
                 if (!cancelled) {
@@ -1343,8 +1358,6 @@ export function App({ mainBranch = "main" }) {
             }
             return;
         }
-        if (state.mode === "aiFollowUpLoading")
-            return;
         if (state.mode === "aiFollowUpPicker") {
             if (key.escape) {
                 dispatch({ type: "mode/list" });
@@ -1621,11 +1634,13 @@ export function App({ mainBranch = "main" }) {
     const selectedTask = state.tasks.find((t) => t.slug === state.selectedSlug) ?? null;
     function startFollowUp(index) {
         const task = state.tasks.find((t) => t.slug === state.selectedSlug) ?? null;
-        const followUp = suggestedFollowUps(task)[index];
+        const followUp = activeFollowUps(task, state.aiFollowUps, state.aiFollowUpSlug)[index];
         if (!task || !followUp) {
             dispatch({
                 type: "flash",
-                message: "No suggested next task for this selection.",
+                message: task?.state === "merged"
+                    ? "No AI follow-up loaded for this applied task."
+                    : "No suggested next task for this selection.",
             });
             return;
         }
@@ -1950,6 +1965,9 @@ export function App({ mainBranch = "main" }) {
             message: `Merging ${slug} → ${targetBranch} in background.`,
         });
         await recordTaskOperation(slug, operation, snapshotTask(task)).catch(() => { });
+        const preMergeDiff = await gitDiff(task.path, targetBranch, 8000).catch(() => "");
+        if (preMergeDiff.trim())
+            preGenDiffRef.current.set(slug, preMergeDiff);
         try {
             await mergeToMain(task.path, targetBranch, controller.signal);
             await clearTaskPreview(slug, task.preview).catch(() => { });
@@ -1978,7 +1996,7 @@ export function App({ mainBranch = "main" }) {
             });
             refreshProjectRef.current();
             // Fetch AI follow-up suggestions in the background.
-            void doFetchAiFollowUps(slug, mergedTask);
+            void doFetchAiFollowUps(slug, mergedTask, preMergeDiff);
         }
         catch (err) {
             if (controller.signal.aborted) {
@@ -2004,25 +2022,67 @@ export function App({ mainBranch = "main" }) {
             }
         }
     }
-    async function doFetchAiFollowUps(slug, task) {
-        dispatch({ type: "mode/aiFollowUpLoading" });
+    async function doFetchAiFollowUps(slug, task, capturedDiff = "") {
+        // Application-level deadline so the function always resolves even if execa's
+        // SIGTERM/SIGKILL escalation stalls (belt-and-suspenders against hanging).
+        const TIMEOUT_MS = 95_000;
+        const deadline = new Promise((_, rej) => setTimeout(() => rej(new Error("suggestion timeout")), TIMEOUT_MS));
+        let storedDiff = capturedDiff || preGenDiffRef.current.get(slug) || "";
+        // Show static fallbacks immediately so the picker appears without delay.
+        const staticFollowUps = mergedFallbackFollowUps(task, storedDiff);
+        if (staticFollowUps.length > 0) {
+            dispatch({ type: "aiFollowUp/loaded", followUps: staticFollowUps, slug });
+        }
         try {
             const cached = preGenFollowUpsRef.current.get(slug);
-            const followUps = cached
-                ? await cached
-                : await fetchAiFollowUps(task, await gitDiff(task.path, targetBranch, 8000), process.cwd());
+            let followUps = cached
+                ? await Promise.race([cached, deadline])
+                : [];
+            if (followUps.length === 0) {
+                // Pre-gen failed or hadn't started — retry with the diff captured
+                // before merge. Post-merge gitDiff can be empty because wt may remove
+                // the worktree, so avoid asking AI for generic no-diff suggestions.
+                if (!storedDiff.trim() && task.state !== "merged" && task.path) {
+                    storedDiff = await gitDiff(task.path, targetBranch, 8000).catch(() => "");
+                }
+                if (!storedDiff.trim()) {
+                    throw new Error("no pre-merge diff captured");
+                }
+                followUps = await Promise.race([
+                    fetchAiFollowUps(task, storedDiff, process.cwd()),
+                    deadline,
+                ]);
+            }
             if (followUps.length === 0)
                 throw new Error("no follow-ups");
-            dispatch({ type: "aiFollowUp/loaded", followUps });
+            // Silently upgrade: replace content without resetting the selected index.
+            dispatch({ type: "aiFollowUp/upgraded", followUps, slug });
         }
-        catch {
-            // Silently return to list on AI errors — not critical.
-            dispatch({ type: "mode/list" });
+        catch (err) {
+            dispatch({
+                type: "flash",
+                message: describeAiFollowUpError(slug, err),
+            });
         }
         finally {
             preGenFollowUpsRef.current.delete(slug);
+            preGenDiffRef.current.delete(slug);
             preGenStartedRef.current.delete(slug);
         }
+    }
+    function describeAiFollowUpError(slug, err) {
+        const detail = err instanceof Error ? err.message : "AI error";
+        const lower = detail.toLowerCase();
+        if (lower.includes("codex exec failed") &&
+            (lower.includes("lookup") ||
+                lower.includes("dns") ||
+                lower.includes("chatgpt.com") ||
+                lower.includes("backend-api") ||
+                lower.includes("connect failed") ||
+                lower.includes("unreachable"))) {
+            return `Codex could not reach its backend for ${slug}; showing deterministic suggestions. Run \`codex doctor\` or set \`INKLIT_AI_PROVIDER=claude\`.`;
+        }
+        return `AI follow-up suggestions unavailable for ${slug}; showing deterministic suggestions (${detail}).`;
     }
     async function doSync(slug) {
         const task = state.tasks.find((t) => t.slug === slug);
@@ -2285,8 +2345,7 @@ export function App({ mainBranch = "main" }) {
         React.createElement(MainVersionBar, { mainVersion: state.mainVersion, targetBranch: targetBranch, tasks: state.tasks, visibleTaskCount: visibleTasks.length, filterQuery: state.filterQuery, width: cols - 2 }),
         React.createElement(Box, { flexDirection: "column", height: listHeight },
             React.createElement(TaskList, { tasks: visibleTasks, selectedSlug: state.selectedSlug, totalTasks: state.tasks.length, filterQuery: state.filterQuery, density: state.listDensity, width: cols - 2, height: listHeight, overlaps: state.taskOverlaps })),
-        React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "aiFollowUpLoading" ? (React.createElement(Box, { paddingX: 1 },
-            React.createElement(Text, { color: "yellow" }, "Fetching AI follow-up suggestions\u2026"))) : state.mode === "aiFollowUpPicker" ? (React.createElement(AiFollowUpOverlay, { followUps: state.aiFollowUps, selectedIndex: state.aiFollowUpSelectedIndex, taskSlug: state.selectedSlug ?? "", width: cols - 6 })) : state.mode === "goalDecompose" ? (React.createElement(GoalDecomposePrompt, { onSpawnAll: (subtasks) => {
+        React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "aiFollowUpPicker" ? (React.createElement(AiFollowUpOverlay, { followUps: state.aiFollowUps, selectedIndex: state.aiFollowUpSelectedIndex, taskSlug: state.aiFollowUpSlug, width: cols - 6 })) : state.mode === "goalDecompose" ? (React.createElement(GoalDecomposePrompt, { onSpawnAll: (subtasks) => {
                 dispatch({ type: "mode/spawning" });
                 (async () => {
                     for (const desc of subtasks) {

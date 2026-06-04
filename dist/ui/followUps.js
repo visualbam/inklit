@@ -1,11 +1,46 @@
+export function activeFollowUps(task, aiFollowUps = [], aiFollowUpSlug = "") {
+    if (!task)
+        return [];
+    if (task.state === "merged" && task.slug === aiFollowUpSlug) {
+        return aiFollowUps;
+    }
+    return suggestedFollowUps(task);
+}
 export function suggestedFollowUps(task) {
     if (!task)
         return [];
     if (task.state === "ready")
         return readyFollowUps(task);
-    if (task.state === "merged")
-        return mergedFollowUps(task);
     return [];
+}
+export function mergedFallbackFollowUps(task, diff = "", limit = 3) {
+    const files = changedFilesFromDiff(diff);
+    const fileSummary = describeFiles(files);
+    const fileList = files.length > 0 ? files.join(", ") : "the merged change";
+    const verificationScope = files.length > 0 ? fileSummary : "the merged behavior";
+    const integrationScope = files.length > 0
+        ? `the target-branch integration points around ${fileSummary}`
+        : "the target-branch integration points around the merged behavior";
+    const followThroughScope = files.length > 0
+        ? `${fileSummary} for unfinished edge cases, docs, and cleanup`
+        : "the merged behavior for unfinished edge cases, docs, and cleanup";
+    return [
+        {
+            title: "Verify merged behavior",
+            detail: `Run focused checks around ${verificationScope}.`,
+            prompt: `Verify the change from ${task.slug} after it was applied: inspect ${fileList}, run the most relevant tests and checks for the affected behavior, confirm the merged path works on the target branch, and fix any regressions you find.`,
+        },
+        {
+            title: "Harden branch integration",
+            detail: `Check ${integrationScope}.`,
+            prompt: `Review the target-branch integration after applying ${task.slug}: inspect ${fileList}, look for assumptions that may no longer hold after the merge, tighten any fragile joins with nearby code, and add focused regression coverage for the integration risks you identify.`,
+        },
+        {
+            title: "Finish follow-through cleanup",
+            detail: `Review ${followThroughScope}.`,
+            prompt: `Build on the merged work from ${task.slug}: inspect ${fileList}, look for missing docs, unclear copy, edge-case handling, or small cleanup that should ship immediately after this change, and implement the highest-leverage follow-through improvements without expanding scope.`,
+        },
+    ].slice(0, limit);
 }
 function readyFollowUps(task) {
     const scope = reviewScope(task);
@@ -34,20 +69,6 @@ function readyFollowUps(task) {
     }
     return suggestions.slice(0, 2);
 }
-function mergedFollowUps(task) {
-    return [
-        {
-            title: "Verify applied work",
-            detail: "Run target-checkout checks for the applied task.",
-            prompt: `Verify ${task.slug} on the target branch after applying: run the relevant linters, tests, and checks for the changed files, confirm there are no regressions or broken integrations, and fix any issues found.`,
-        },
-        {
-            title: "Polish follow-through",
-            detail: "Clean docs, UX copy, edge cases, and nearby cleanup.",
-            prompt: `Polish the work from ${task.slug}: review the applied change for missing documentation, unclear error messages, edge cases not handled, or nearby code that would benefit from cleanup. Make any small improvements that build on the change without introducing new scope.`,
-        },
-    ];
-}
 function reviewScope(task) {
     const stats = task.review;
     if (!stats)
@@ -69,5 +90,29 @@ function reviewScope(task) {
 }
 function fileCount(count, noun) {
     return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+function changedFilesFromDiff(diff) {
+    const files = [];
+    const seen = new Set();
+    for (const line of diff.split("\n")) {
+        const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+        if (!match)
+            continue;
+        const candidate = match[2] || match[1];
+        if (!candidate || seen.has(candidate))
+            continue;
+        seen.add(candidate);
+        files.push(candidate);
+    }
+    return files;
+}
+function describeFiles(files) {
+    if (files.length === 0)
+        return "the merged change";
+    if (files.length === 1)
+        return `\`${files[0]}\``;
+    if (files.length === 2)
+        return `\`${files[0]}\` and \`${files[1]}\``;
+    return `\`${files[0]}\`, \`${files[1]}\`, and ${files.length - 2} more file${files.length === 3 ? "" : "s"}`;
 }
 //# sourceMappingURL=followUps.js.map

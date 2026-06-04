@@ -159,7 +159,7 @@ export function helpSections(targetBranch: string): HelpSection[] {
       title: "Actions",
       rows: [
         ["n", "new agent task - prompts for description, then agent (c/x)"],
-        ["N", "decompose a high-level goal into parallel subtasks (claude)"],
+        ["N", "decompose a high-level goal into parallel subtasks (AI)"],
         ["T / 1", "start the top suggested next task"],
         ["2", "start the second suggested next task when shown"],
         ["s", "AI follow-up suggestions (done task) · sync from main (active task)"],

@@ -20,11 +20,19 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-test("fetchAiFollowUps parses JSON from claude stdout", async () => {
-  await withFakeClaude(
+test("fetchAiFollowUps parses JSON from codex last message output", async () => {
+  await withFakeAiCli(
+    "codex",
     [
       "#!/usr/bin/env node",
-      "console.log(JSON.stringify([{",
+      "const fs = require('node:fs');",
+      "const execIndex = process.argv.indexOf('exec');",
+      "const approvalIndex = process.argv.indexOf('--ask-for-approval');",
+      "if (execIndex === -1 || approvalIndex === -1 || approvalIndex > execIndex) process.exit(3);",
+      "const out = process.argv[process.argv.indexOf('--output-last-message') + 1];",
+      "const schema = process.argv[process.argv.indexOf('--output-schema') + 1];",
+      "if (!schema || !fs.existsSync(schema)) process.exit(2);",
+      "fs.writeFileSync(out, JSON.stringify([{",
       "  title: 'Verify edge cases',",
       "  detail: 'Check the newly merged behavior.',",
       "  prompt: 'Inspect the diff and add focused tests.'",
@@ -48,8 +56,9 @@ test("fetchAiFollowUps parses JSON from claude stdout", async () => {
   );
 });
 
-test("fetchAiFollowUps reports non-zero claude stdout errors", async () => {
-  await withFakeClaude(
+test("fetchAiFollowUps reports non-zero codex stdout errors", async () => {
+  await withFakeAiCli(
+    "codex",
     [
       "#!/usr/bin/env node",
       "console.log('Not logged in · Please run /login');",
@@ -63,29 +72,62 @@ test("fetchAiFollowUps reports non-zero claude stdout errors", async () => {
             "diff --git a/src/example.ts b/src/example.ts\n+export const value = 1;\n",
             cwd
           ),
-        /claude -p failed: Not logged in/
+        /codex exec failed: Not logged in/
       );
     }
   );
 });
 
-async function withFakeClaude(
+test("fetchAiFollowUps can use claude provider when configured", async () => {
+  await withFakeAiCli(
+    "claude",
+    [
+      "#!/usr/bin/env node",
+      "console.log(JSON.stringify([{",
+      "  title: 'Verify edge cases',",
+      "  detail: 'Check the newly merged behavior.',",
+      "  prompt: 'Inspect the diff and add focused tests.'",
+      "}]));",
+    ].join("\n"),
+    async (cwd) => {
+      process.env.INKLIT_AI_PROVIDER = "claude";
+      const followUps = await fetchAiFollowUps(
+        task(),
+        "diff --git a/src/example.ts b/src/example.ts\n+export const value = 1;\n",
+        cwd
+      );
+
+      assert.equal(followUps[0]?.title, "Verify edge cases");
+    }
+  );
+});
+
+async function withFakeAiCli(
+  binary: string,
   source: string,
   run: (cwd: string) => Promise<void>
 ): Promise<void> {
   const root = await fs.mkdtemp(join(tmpdir(), "inklit-ai-test-"));
   const binDir = join(root, "bin");
-  const fakeClaude = join(binDir, "claude");
+  const fakeBinary = join(binDir, binary);
   const oldPath = process.env.PATH;
+  const oldProvider = process.env.INKLIT_AI_PROVIDER;
+  const oldModel = process.env.INKLIT_CODEX_MODEL;
   try {
     await fs.mkdir(binDir);
-    await fs.writeFile(fakeClaude, source);
-    await fs.chmod(fakeClaude, 0o755);
+    await fs.writeFile(fakeBinary, source);
+    await fs.chmod(fakeBinary, 0o755);
     process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+    process.env.INKLIT_AI_PROVIDER = binary === "claude" ? "claude" : "codex";
+    delete process.env.INKLIT_CODEX_MODEL;
     await run(root);
   } finally {
     if (oldPath === undefined) delete process.env.PATH;
     else process.env.PATH = oldPath;
+    if (oldProvider === undefined) delete process.env.INKLIT_AI_PROVIDER;
+    else process.env.INKLIT_AI_PROVIDER = oldProvider;
+    if (oldModel === undefined) delete process.env.INKLIT_CODEX_MODEL;
+    else process.env.INKLIT_CODEX_MODEL = oldModel;
     await fs.rm(root, { recursive: true, force: true });
   }
 }
