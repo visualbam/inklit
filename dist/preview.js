@@ -1,15 +1,21 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import { join } from "node:path";
 import { execa } from "execa";
 import { listProject } from "./wt.js";
 import { clearPreview, loadAll, recordPreview } from "./state.js";
 const TASK_PATH_POLL_MS = 250;
 const TASK_PATH_TIMEOUT_MS = 8_000;
-const PREVIEW_BOOT_TIMEOUT_MS = 12_000;
+const PREVIEW_BOOT_TIMEOUT_MS = 30_000;
 const PREVIEW_PROBE_MS = 250;
 const PREVIEW_HOST = "127.0.0.1";
+const BASE_PREVIEW_PORT = 3000;
+const MAX_PORT_SCAN = 100;
+/** Matches the first localhost URL a dev server prints (vite, next, etc.). */
+const SERVER_URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d+))?[^\s)'"]*/i;
+const ANSI_RE = /\x1B\[[0-9;]*[A-Za-z]/g;
 const STATIC_SERVER_SOURCE = String.raw `import { createServer } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
 import { promises as fs } from "node:fs";
@@ -146,19 +152,34 @@ export async function clearTaskPreview(slug, preview) {
     await clearPreview(slug).catch(() => { });
 }
 export async function detectPreviewPlans(worktreePath) {
-    const pkg = await readPackageJson(worktreePath);
     const plans = [];
-    const pm = packageManagerFor(pkg);
+    const pkg = await readPackageJson(worktreePath);
     const scripts = pkg?.scripts ?? {};
-    for (const scriptName of ["dev", "start", "preview", "serve"]) {
-        if (typeof scripts[scriptName] !== "string")
-            continue;
-        plans.push({
-            kind: "app",
-            label: `${pm} run ${scriptName}`,
-            packageManager: pm,
-            scriptName,
-        });
+    if (Object.keys(scripts).length > 0) {
+        const pm = await detectPackageManager(worktreePath, pkg);
+        for (const scriptName of ["dev", "start", "preview", "serve"]) {
+            if (typeof scripts[scriptName] !== "string")
+                continue;
+            plans.push({
+                kind: "app",
+                label: `${pm} run ${scriptName}`,
+                command: pm,
+                args: runScriptArgs(pm, scriptName),
+            });
+        }
+    }
+    const denoTasks = await readDenoTasks(worktreePath);
+    if (denoTasks) {
+        for (const taskName of ["dev", "start", "serve"]) {
+            if (typeof denoTasks[taskName] === "undefined")
+                continue;
+            plans.push({
+                kind: "app",
+                label: `deno task ${taskName}`,
+                command: "deno",
+                args: ["task", taskName],
+            });
+        }
     }
     plans.push({
         kind: "static",
@@ -167,16 +188,20 @@ export async function detectPreviewPlans(worktreePath) {
     return plans;
 }
 async function launchPreviewPlan(plan, worktreePath) {
-    const port = await pickFreePort();
     if (plan.kind === "static") {
+        const port = await pickFreePort();
         return launchStaticPreview(worktreePath, port, plan.label);
     }
-    if (!plan.scriptName || !plan.packageManager)
-        return null;
-    return launchAppPreview(worktreePath, port, plan);
+    return launchAppPreview(worktreePath, plan);
 }
-async function launchAppPreview(worktreePath, port, plan) {
-    const args = packageManagerRunArgs(plan.packageManager, plan.scriptName, port);
+async function launchAppPreview(worktreePath, plan) {
+    // Pre-allocate a port and pass it via PORT for frameworks that honour it
+    // (Next.js, CRA, plain node servers). Vite and friends pick their own port
+    // and print it instead — we parse that from the server's output. Whichever
+    // becomes reachable first wins, so we never assume the wrong port.
+    const port = await pickFreePort();
+    const logPath = join(os.tmpdir(), `inklit-preview-${Date.now()}-${port}.log`);
+    const handle = await fs.open(logPath, "w").catch(() => null);
     const env = {
         ...process.env,
         HOST: PREVIEW_HOST,
@@ -185,25 +210,31 @@ async function launchAppPreview(worktreePath, port, plan) {
         BROWSER: "none",
         NODE_ENV: "development",
     };
-    const child = spawn(plan.packageManager, args, {
+    const child = spawn(plan.command, plan.args, {
         cwd: worktreePath,
         detached: true,
         env,
-        stdio: "ignore",
+        stdio: ["ignore", handle ? handle.fd : "ignore", handle ? handle.fd : "ignore"],
     });
     child.once("error", () => { });
-    if (!child.pid)
+    const pid = child.pid;
+    // The child inherited a dup of the fd; close our copy so it isn't leaked.
+    await handle?.close().catch(() => { });
+    if (!pid) {
+        await fs.rm(logPath, { force: true }).catch(() => { });
         return null;
+    }
     child.unref();
-    const ready = await waitForPreviewReady(child.pid, port, PREVIEW_BOOT_TIMEOUT_MS);
-    if (!ready) {
-        await stopPreview({ pid: child.pid }).catch(() => { });
+    const found = await waitForAppUrl(pid, port, logPath, PREVIEW_BOOT_TIMEOUT_MS);
+    await fs.rm(logPath, { force: true }).catch(() => { });
+    if (!found) {
+        await stopPreview({ pid }).catch(() => { });
         return null;
     }
     return {
-        url: `http://${PREVIEW_HOST}:${port}`,
-        port,
-        pid: child.pid,
+        url: found.url,
+        port: found.port,
+        pid,
         command: plan.label,
         kind: "app",
         startedAt: Date.now(),
@@ -254,7 +285,46 @@ async function readPackageJson(worktreePath) {
         return null;
     }
 }
-function packageManagerFor(pkg) {
+async function readDenoTasks(worktreePath) {
+    for (const name of ["deno.json", "deno.jsonc"]) {
+        try {
+            const raw = await fs.readFile(join(worktreePath, name), "utf8");
+            // Tolerate JSONC comments by stripping line/block comments before parse.
+            const stripped = raw
+                .replace(/\/\*[\s\S]*?\*\//g, "")
+                .replace(/(^|[^:])\/\/.*$/gm, "$1");
+            const parsed = JSON.parse(stripped);
+            if (parsed?.tasks && typeof parsed.tasks === "object")
+                return parsed.tasks;
+            return {};
+        }
+        catch {
+            continue;
+        }
+    }
+    return null;
+}
+async function fileExists(path) {
+    return fs
+        .access(path)
+        .then(() => true)
+        .catch(() => false);
+}
+/**
+ * Pick the package manager without the user specifying one: lockfiles are the
+ * strongest signal, then the corepack `packageManager` field, then npm.
+ */
+async function detectPackageManager(worktreePath, pkg) {
+    if (await fileExists(join(worktreePath, "pnpm-lock.yaml")))
+        return "pnpm";
+    if (await fileExists(join(worktreePath, "yarn.lock")))
+        return "yarn";
+    if ((await fileExists(join(worktreePath, "bun.lockb"))) ||
+        (await fileExists(join(worktreePath, "bun.lock")))) {
+        return "bun";
+    }
+    if (await fileExists(join(worktreePath, "package-lock.json")))
+        return "npm";
     const declared = pkg?.packageManager;
     if (declared?.startsWith("pnpm@"))
         return "pnpm";
@@ -262,21 +332,74 @@ function packageManagerFor(pkg) {
         return "yarn";
     if (declared?.startsWith("bun@"))
         return "bun";
-    if (declared?.startsWith("npm@"))
-        return "npm";
     return "npm";
 }
-function packageManagerRunArgs(packageManager, scriptName, port) {
-    const extra = ["--host", PREVIEW_HOST, "--port", String(port)];
+function runScriptArgs(packageManager, scriptName) {
+    // No forced --port/--host: compound scripts (e.g. "api & client") choke on
+    // appended flags, and we read the real bound port from the server's output.
     switch (packageManager) {
-        case "npm":
-        case "pnpm":
-        case "bun":
         case "yarn":
-            return ["run", scriptName, "--", ...extra];
+            return [scriptName];
+        case "bun":
+        case "npm":
+            return ["run", scriptName];
+        case "pnpm":
+            // Replit-style projects ship a `preinstall` guard that aborts unless run
+            // by pnpm. pnpm 9+ auto-runs a deps check (`pnpm install`) before scripts
+            // and that nested check trips the guard, killing the dev server before it
+            // starts. Skip the pre-run verification so the script launches directly.
+            return ["--config.verify-deps-before-run=false", "run", scriptName];
     }
 }
-async function pickFreePort() {
+/**
+ * Wait for a dev server to become reachable. Returns as soon as either the
+ * URL parsed from the server's log is accepting connections, or the
+ * pre-allocated PORT we passed is. Null on process death or timeout.
+ */
+async function waitForAppUrl(pid, fallbackPort, logPath, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (!isProcessAlive(pid))
+            return null;
+        const log = await fs.readFile(logPath, "utf8").catch(() => "");
+        const match = log.replace(ANSI_RE, "").match(SERVER_URL_RE);
+        if (match) {
+            const parsedPort = match[1] ? Number(match[1]) : 80;
+            if (parsedPort > 0 && (await isPortOpen(parsedPort))) {
+                return { url: `http://${PREVIEW_HOST}:${parsedPort}`, port: parsedPort };
+            }
+        }
+        if (await isPortOpen(fallbackPort)) {
+            return { url: `http://${PREVIEW_HOST}:${fallbackPort}`, port: fallbackPort };
+        }
+        await sleep(PREVIEW_PROBE_MS);
+    }
+    return null;
+}
+/**
+ * Allocate a preview port by scanning upward from a base, returning the first
+ * free one — so previews get predictable, incrementing ports (3000, 3001, …)
+ * and never collide with a port already in use. Falls back to an OS-assigned
+ * random port only if the whole scan range is occupied.
+ */
+async function pickFreePort(base = BASE_PREVIEW_PORT) {
+    for (let port = base; port < base + MAX_PORT_SCAN; port += 1) {
+        if (await isPortFree(port))
+            return port;
+    }
+    return pickRandomFreePort();
+}
+async function isPortFree(port) {
+    return await new Promise((resolve) => {
+        const server = net.createServer();
+        server.unref();
+        server.once("error", () => resolve(false));
+        server.listen(port, PREVIEW_HOST, () => {
+            server.close(() => resolve(true));
+        });
+    });
+}
+async function pickRandomFreePort() {
     for (let attempt = 0; attempt < 20; attempt += 1) {
         const port = await new Promise((resolvePort, rejectPort) => {
             const server = net.createServer();
