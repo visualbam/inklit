@@ -3,9 +3,273 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dogs and Cats</title>
+  <title>Dogs vs Cats</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      padding: 40px 20px;
+      background: #1a1a2e;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      line-height: 1.6;
+    }
+
+    .page-wrap {
+      width: min(100%, 900px);
+      margin: 0 auto;
+    }
+
+    /* Page header card */
+    header {
+      padding: 36px 32px;
+      margin-bottom: 32px;
+      background: #16213e;
+      border: 2px solid #0f3460;
+      border-radius: 8px;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+      text-align: center;
+    }
+
+    header h1 {
+      color: #a0c4ff;
+      font-size: 2.5rem;
+      letter-spacing: 0.04em;
+      margin-bottom: 10px;
+    }
+
+    header p {
+      color: #bbb;
+      font-size: 1rem;
+    }
+
+    /* Comparison sections */
+    section {
+      margin-bottom: 32px;
+    }
+
+    section > h2 {
+      font-size: 1.15rem;
+      color: #a0c4ff;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #0f3460;
+    }
+
+    .pair {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 580px) {
+      .pair { grid-template-columns: 1fr; }
+    }
+
+    /* Article cards */
+    article {
+      padding: 24px;
+      background: #16213e;
+      border: 2px solid #0f3460;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+
+    article h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    article.dogs h3 { color: #ff6b6b; }
+    article.cats h3 { color: #4ecdc4; }
+
+    article p {
+      font-size: 0.95rem;
+      color: #ccc;
+    }
+
+    article p + p {
+      margin-top: 10px;
+    }
+
+    article ul {
+      list-style: none;
+      margin-top: 12px;
+    }
+
+    article ul li {
+      position: relative;
+      padding-left: 18px;
+      padding-bottom: 6px;
+      font-size: 0.95rem;
+      color: #ccc;
+    }
+
+    article.dogs ul li::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+      color: #ff6b6b;
+    }
+
+    article.cats ul li::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+      color: #4ecdc4;
+    }
+
+    /* Back link */
+    nav {
+      margin-top: 8px;
+      text-align: center;
+    }
+
+    nav a {
+      display: inline-block;
+      margin-top: 24px;
+      color: #4ecdc4;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    nav a:hover,
+    nav a:focus {
+      color: #a0c4ff;
+      text-decoration: underline;
+    }
+  </style>
 </head>
 <body>
-  <h1>Dogs and Cats</h1>
+  <div class="page-wrap">
+
+    <header>
+      <h1>Dogs vs Cats</h1>
+      <p>A comparison of two of humanity's most beloved companion animals.</p>
+    </header>
+
+    <main>
+
+      <section aria-labelledby="physical-heading">
+        <h2 id="physical-heading">Physical Characteristics</h2>
+        <div class="pair">
+          <article class="dogs">
+            <h3>Dogs</h3>
+            <p>Dogs (Canis lupus familiaris) show extraordinary diversity across their 340+ recognized breeds, ranging from the 1 kg Chihuahua to the 90 kg Great Dane.</p>
+            <ul>
+              <li>Coats: smooth, wire, long, curly, and double-coated varieties</li>
+              <li>Muzzles vary from flat (brachycephalic) to long and narrow</li>
+              <li>Ear shapes: upright, floppy, folded, or rose ears</li>
+              <li>Non-retractable claws adapted for traction and digging</li>
+            </ul>
+          </article>
+          <article class="cats">
+            <h3>Cats</h3>
+            <p>Domestic cats (Felis catus) are more uniform in size—typically 3–6 kg—though selective breeding has produced notable variants like the large Maine Coon and tiny Singapura.</p>
+            <ul>
+              <li>Coats: shorthair, longhair, semi-longhair, or hairless (Sphynx)</li>
+              <li>Most share a similar facial profile; Persians are notably flat-faced</li>
+              <li>Ear shapes: upright and triangular; Scottish Folds have folded ears</li>
+              <li>Fully retractable claws—a key anatomical difference from dogs</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="behavior-heading">
+        <h2 id="behavior-heading">Behavior &amp; Temperament</h2>
+        <div class="pair">
+          <article class="dogs">
+            <h3>Dogs</h3>
+            <p>Dogs are social pack animals. Co-evolving alongside humans for over 15,000 years has given them a unique ability to read human social cues and form deep emotional bonds.</p>
+            <ul>
+              <li>Highly social—thrive on companionship and regular interaction</li>
+              <li>Trainable through positive reinforcement; excel at tasks and commands</li>
+              <li>Vocal communicators: barking, whining, and howling</li>
+              <li>Loyal and protective of their family group</li>
+            </ul>
+          </article>
+          <article class="cats">
+            <h3>Cats</h3>
+            <p>Cats are solitary hunters by nature, though domestication has made them highly adaptable to living with humans. They retain strong independent instincts even as pets.</p>
+            <ul>
+              <li>Self-sufficient—content with alone time and independent exploration</li>
+              <li>Bond selectively; form deep but less effusive attachments</li>
+              <li>Communicate through purring, chirping, hissing, and body language</li>
+              <li>Crepuscular—most active at dawn and dusk</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="care-heading">
+        <h2 id="care-heading">Care Requirements</h2>
+        <div class="pair">
+          <article class="dogs">
+            <h3>Dogs</h3>
+            <p>Dogs demand more active daily care, making them better suited to owners with consistent schedules and time to invest in training, exercise, and socialization.</p>
+            <ul>
+              <li>Daily exercise: 30 minutes to 2+ hours depending on breed</li>
+              <li>Regular grooming varies by coat type (daily to monthly brushing)</li>
+              <li>Training and mental stimulation are essential for well-being</li>
+              <li>Veterinary check-ups, vaccinations, and parasite prevention</li>
+            </ul>
+          </article>
+          <article class="cats">
+            <h3>Cats</h3>
+            <p>Cats are generally lower-maintenance pets. Their self-grooming habits and independent nature make them well-suited to apartment living and busier lifestyles.</p>
+            <ul>
+              <li>Self-grooming; longhairs benefit from regular brushing</li>
+              <li>Indoor enrichment: scratching posts, climbing structures, and toys</li>
+              <li>Litter box should be scooped daily and fully changed weekly</li>
+              <li>Regular veterinary visits, vaccinations, and spay/neuter recommended</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="history-heading">
+        <h2 id="history-heading">History &amp; Domestication</h2>
+        <div class="pair">
+          <article class="dogs">
+            <h3>Dogs</h3>
+            <p>Dogs were the first animals domesticated by humans, with genetic evidence placing the split from wolf ancestors between 20,000 and 40,000 years ago. The relationship was likely mutualistic from the start.</p>
+            <ul>
+              <li>Earliest domestication in Eurasia or East Asia</li>
+              <li>Selectively bred for herding, hunting, guarding, and companionship</li>
+              <li>Feature prominently in ancient Egyptian, Greek, and Roman art</li>
+              <li>Today: roughly 900 million dogs worldwide</li>
+            </ul>
+          </article>
+          <article class="cats">
+            <h3>Cats</h3>
+            <p>Cats were likely domesticated around 10,000 years ago in the Fertile Crescent, coinciding with the rise of agricultural settlements—grain stores attracted rodents, which attracted wildcats.</p>
+            <ul>
+              <li>Descended from the Near Eastern wildcat (Felis silvestris lybica)</li>
+              <li>Revered in ancient Egypt; killing a cat was once punishable by death</li>
+              <li>Spread globally via trade routes, especially by seafarers</li>
+              <li>Today: roughly 600 million domestic cats worldwide</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+    </main>
+
+    <nav aria-label="Site navigation">
+      <a href="index.html">Back to the game</a>
+    </nav>
+
+  </div>
 </body>
 </html>
