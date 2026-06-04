@@ -143,8 +143,6 @@ export interface AppState {
     | "closingAll"
     | "resumeAgentPicker"
     | "resuming"
-    | "sendInput"
-    | "sending"
     | "filter"
     | "commandPalette"
     | "help"
@@ -172,8 +170,6 @@ export interface AppState {
   pendingResumeSlug: string | null;
   /** Slug of the task being continued (c keybind). */
   pendingContinueSlug: string | null;
-  /** Buffer for the inline send-to-agent prompt (i keybind). */
-  sendInputValue: string;
   /** Buffer for the continue-with-prompt input (c keybind). */
   continuePromptValue: string;
   /** Prompt text captured before handing off to resume flow. */
@@ -223,7 +219,6 @@ export const initialState: AppState = {
   pendingDescription: "",
   pendingResumeSlug: null,
   pendingContinueSlug: null,
-  sendInputValue: "",
   continuePromptValue: "",
   pendingContinuePrompt: "",
   filterQuery: "",

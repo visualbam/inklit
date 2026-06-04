@@ -37,7 +37,7 @@ export function taskListLineCount(tasks, totalTasks, filterQuery, density) {
 export function taskListMinimumHeight(tasks, totalTasks, filterQuery, density) {
     if (tasks.length === 0)
         return filterQuery.trim() ? 4 : 6;
-    const targetRows = Math.min(tasks.length, density === "compact" ? 3 : 4);
+    const targetRows = Math.min(tasks.length, 5);
     const sample = tasks.slice(0, targetRows);
     const hasOverflow = tasks.length > targetRows;
     return taskListLineCountForSlice({
@@ -109,7 +109,7 @@ function taskListLineCountForSlice({ tasks, totalTasks, matchedTaskCount, filter
         return filterFooter + hiddenMarkers;
     const groupCount = countGroups(tasks);
     const itemLines = density === "compact" ? tasks.length * 2 : tasks.length;
-    const headerLines = density === "compact" ? 0 : 3;
+    const headerLines = density === "compact" ? 0 : 2;
     return headerLines + groupCount + itemLines + filterFooter + hiddenMarkers;
 }
 function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, overlaps, }) {
@@ -122,12 +122,9 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
         DETAIL_COLUMN_GAP * 4;
     const slugCol = Math.max(10, contentWidth - fixed);
     const gap = " ".repeat(DETAIL_COLUMN_GAP);
-    const divider = "─".repeat(Math.max(0, width - 2));
     const rule = "╌".repeat(Math.max(0, width - 2));
     let currentGroup = null;
     return (React.createElement(Box, { flexDirection: "column" },
-        React.createElement(Box, { paddingX: 1 },
-            React.createElement(Text, { dimColor: true }, divider)),
         React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { dimColor: true },
                 pad("", DETAIL_LEADING_COL),

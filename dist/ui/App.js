@@ -2323,9 +2323,10 @@ export function App({ mainBranch = "main" }) {
     const desiredListHeight = taskListLineCount(visibleTasks, state.tasks.length, state.filterQuery, state.listDensity);
     const minimumListHeight = taskListMinimumHeight(visibleTasks, state.tasks.length, state.filterQuery, state.listDensity);
     const preferredListHeight = Math.max(minimumListHeight, Math.floor(rows * (state.listDensity === "compact" ? 0.5 : 0.42)));
-    const availableListHeight = Math.max(4, rows - bottomStripHeight - 8 - 2);
+    const LIST_BORDER_HEIGHT = 2;
+    const availableListHeight = Math.max(4, rows - bottomStripHeight - 8 - 2 - LIST_BORDER_HEIGHT);
     const listHeight = Math.max(4, Math.min(desiredListHeight, preferredListHeight, availableListHeight));
-    const inspectorHeight = Math.max(8, rows - listHeight - bottomStripHeight - 2);
+    const inspectorHeight = Math.max(8, rows - (listHeight + LIST_BORDER_HEIGHT) - bottomStripHeight - 2);
     // Same formula as Inspector — the reducer needs it so it can clamp scrolls.
     const inspectorMaxLines = Math.max(3, inspectorHeight - 6);
     const content = getContent(state, state.selectedSlug);
@@ -2343,8 +2344,8 @@ export function App({ mainBranch = "main" }) {
     }
     return (React.createElement(Box, { flexDirection: "column", height: rows },
         React.createElement(MainVersionBar, { mainVersion: state.mainVersion, targetBranch: targetBranch, tasks: state.tasks, visibleTaskCount: visibleTasks.length, filterQuery: state.filterQuery, width: cols - 2 }),
-        React.createElement(Box, { flexDirection: "column", height: listHeight },
-            React.createElement(TaskList, { tasks: visibleTasks, selectedSlug: state.selectedSlug, totalTasks: state.tasks.length, filterQuery: state.filterQuery, density: state.listDensity, width: cols - 2, height: listHeight, overlaps: state.taskOverlaps })),
+        React.createElement(Box, { flexDirection: "column", height: listHeight + LIST_BORDER_HEIGHT, borderStyle: "single", borderDimColor: true },
+            React.createElement(TaskList, { tasks: visibleTasks, selectedSlug: state.selectedSlug, totalTasks: state.tasks.length, filterQuery: state.filterQuery, density: state.listDensity, width: cols - 4, height: listHeight, overlaps: state.taskOverlaps })),
         React.createElement(Box, { flexGrow: 1, flexDirection: "column" }, state.mode === "aiFollowUpPicker" ? (React.createElement(AiFollowUpOverlay, { followUps: state.aiFollowUps, selectedIndex: state.aiFollowUpSelectedIndex, taskSlug: state.aiFollowUpSlug, width: cols - 6 })) : state.mode === "goalDecompose" ? (React.createElement(GoalDecomposePrompt, { onSpawnAll: (subtasks) => {
                 dispatch({ type: "mode/spawning" });
                 (async () => {

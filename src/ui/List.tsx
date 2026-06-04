@@ -103,7 +103,7 @@ export function taskListMinimumHeight(
   density: TaskListDensity
 ): number {
   if (tasks.length === 0) return filterQuery.trim() ? 4 : 6;
-  const targetRows = Math.min(tasks.length, density === "compact" ? 3 : 4);
+  const targetRows = Math.min(tasks.length, 5);
   const sample = tasks.slice(0, targetRows);
   const hasOverflow = tasks.length > targetRows;
   return taskListLineCountForSlice({
@@ -221,7 +221,7 @@ function taskListLineCountForSlice({
   if (tasks.length === 0) return filterFooter + hiddenMarkers;
   const groupCount = countGroups(tasks);
   const itemLines = density === "compact" ? tasks.length * 2 : tasks.length;
-  const headerLines = density === "compact" ? 0 : 3;
+  const headerLines = density === "compact" ? 0 : 2;
   return headerLines + groupCount + itemLines + filterFooter + hiddenMarkers;
 }
 
@@ -251,15 +251,11 @@ function DetailedTaskList({
     DETAIL_COLUMN_GAP * 4;
   const slugCol = Math.max(10, contentWidth - fixed);
   const gap = " ".repeat(DETAIL_COLUMN_GAP);
-  const divider = "─".repeat(Math.max(0, width - 2));
   const rule = "╌".repeat(Math.max(0, width - 2));
   let currentGroup: string | null = null;
 
   return (
     <Box flexDirection="column">
-      <Box paddingX={1}>
-        <Text dimColor>{divider}</Text>
-      </Box>
       <Box paddingX={1}>
         <Text dimColor>
           {pad("", DETAIL_LEADING_COL)}

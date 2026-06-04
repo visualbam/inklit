@@ -14,7 +14,6 @@ import { MainVersionBar } from "./MainVersionBar.js";
 import { StatusBar } from "./StatusBar.js";
 import { DescriptionPrompt, AgentPicker } from "./NewTaskPrompt.js";
 import { ConfirmPrompt } from "./ConfirmPrompt.js";
-import { SendInputPrompt } from "./SendInputPrompt.js";
 import { ContinuePrompt } from "./ContinuePrompt.js";
 import { FilterPrompt } from "./FilterPrompt.js";
 import { HelpOverlay } from "./HelpOverlay.js";
@@ -131,15 +130,12 @@ type Action =
   | { type: "newTask/clipboardImage"; path: string }
   | { type: "newTask/attachImage" }
   | { type: "newTask/clearImage" }
-  | { type: "mode/sendInput" }
-  | { type: "mode/sending" }
   | { type: "mode/filter" }
   | { type: "mode/commandPalette" }
   | { type: "mode/help" }
   | { type: "prefs/loaded"; listDensity?: TaskListDensity }
   | { type: "list/toggleDensity" }
   | { type: "archive/toggleVisibility" }
-  | { type: "sendInput/setValue"; value: string }
   | { type: "filter/set"; value: string }
   | { type: "filter/clear" }
   | { type: "task/reviewStats"; slug: string; stats: ReviewStats }
@@ -427,24 +423,12 @@ function reducer(s: RenderState, a: Action): RenderState {
         newTaskCursor: 0,
         pendingResumeSlug: null,
         pendingContinueSlug: null,
-        sendInputValue: "",
         continuePromptValue: "",
         pendingContinuePrompt: "",
         pendingClipboardImage: undefined,
         pendingAttachedImages: undefined,
       };
     }
-    case "mode/sendInput":
-      // Snap inspector to the live agent transcript so the user can see
-      // exactly what they're typing into.
-      return {
-        ...s,
-        mode: "sendInput",
-        sendInputValue: "",
-        inspectorMode: "agent",
-      };
-    case "mode/sending":
-      return { ...s, mode: "sending" };
     case "mode/filter":
       return { ...s, mode: "filter" };
     case "mode/commandPalette":
@@ -469,8 +453,6 @@ function reducer(s: RenderState, a: Action): RenderState {
           !s.showArchived
         ),
       };
-    case "sendInput/setValue":
-      return { ...s, sendInputValue: a.value };
     case "mode/continuePrompt":
       return {
         ...s,
@@ -1551,7 +1533,6 @@ export function App({ mainBranch = "main" }: AppProps) {
         return;
       }
       if (state.mode === "resuming") return;
-      if (state.mode === "sending") return;
       if (state.mode === "help") {
         // Any of ?, esc, q (or Ctrl-C) closes. Other keys ignored so a
         // mistyped action while reading doesn't trigger something
@@ -1564,11 +1545,6 @@ export function App({ mainBranch = "main" }: AppProps) {
         ) {
           dispatch({ type: "mode/list" });
         }
-        return;
-      }
-      if (state.mode === "sendInput") {
-        // TextInput handles its own keystrokes; we just trap escape to bail.
-        if (key.escape) dispatch({ type: "mode/list" });
         return;
       }
       if (state.mode === "continuePrompt") {
@@ -1867,10 +1843,6 @@ export function App({ mainBranch = "main" }: AppProps) {
         void doOpenPreview();
         return;
       }
-      if (input === "i") {
-        requestSendSelected();
-        return;
-      }
       if (input === "c") {
         requestContinueSelected();
         return;
@@ -2093,27 +2065,6 @@ export function App({ mainBranch = "main" }: AppProps) {
     }
   }
 
-  function requestSendSelected() {
-    const slug = state.selectedSlug;
-    if (!slug) return;
-    if (!inSess) {
-      dispatch({
-        type: "flash",
-        message: "Not in zellij - send disabled.",
-      });
-      return;
-    }
-    const task = state.tasks.find((t) => t.slug === slug);
-    if (!task || !isLivePane(task.state)) {
-      dispatch({
-        type: "flash",
-        message: `Cannot send: ${slug} has no live pane.`,
-      });
-      return;
-    }
-    dispatch({ type: "mode/sendInput" });
-  }
-
   function runPaletteCommand(input: string): boolean {
     if (input === "n") requestNewTask();
     else if (input === "N") dispatch({ type: "mode/goalDecompose" });
@@ -2131,7 +2082,6 @@ export function App({ mainBranch = "main" }: AppProps) {
       dispatch({ type: "mode/list" });
       requestFocusOrResume();
     } else if (input === "c") requestContinueSelected();
-    else if (input === "i") requestSendSelected();
     else if (input === "m") requestApplySelected();
     else if (input === "X") requestKillSelected();
     else if (input === "A") void doArchiveSelected();
@@ -2452,32 +2402,6 @@ export function App({ mainBranch = "main" }: AppProps) {
     }
   }
 
-  async function doSendInput(slug: string, text: string) {
-    dispatch({ type: "mode/sending" });
-    try {
-      const ok = await tmuxSendKeys(slug, text);
-      dispatch({ type: "mode/list" });
-      if (ok) {
-        const preview = text.length > 30 ? text.slice(0, 30) + "…" : text;
-        dispatch({
-          type: "flash",
-          message: `→ ${slug}: ${preview || "(enter)"}`,
-        });
-      } else {
-        dispatch({
-          type: "error",
-          message: `Could not send to ${slug} — pane may have closed.`,
-        });
-      }
-    } catch (err) {
-      dispatch({ type: "mode/list" });
-      dispatch({
-        type: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
   async function doKill(slug: string) {
     dispatch({ type: "mode/killing" });
     try {
@@ -2556,7 +2480,6 @@ export function App({ mainBranch = "main" }: AppProps) {
     state.mode === "syncing" ||
     state.mode === "killing" ||
     state.mode === "closingAll";
-  const showSendInput = state.mode === "sendInput" || state.mode === "sending";
   const showContinuePrompt = state.mode === "continuePrompt";
   const showFilter = state.mode === "filter";
   const showNewTask =
@@ -2568,7 +2491,7 @@ export function App({ mainBranch = "main" }: AppProps) {
   // newTask/agentPicker need 9 lines (AgentPicker has 3 options + esc line).
   const bottomStripHeight = showNewTask
     ? 9
-    : showConfirm || showSendInput || showContinuePrompt || showFilter
+    : showConfirm || showContinuePrompt || showFilter
       ? 7
       : 0;
   const desiredListHeight = taskListLineCount(
@@ -2587,12 +2510,13 @@ export function App({ mainBranch = "main" }: AppProps) {
     minimumListHeight,
     Math.floor(rows * (state.listDensity === "compact" ? 0.5 : 0.42))
   );
-  const availableListHeight = Math.max(4, rows - bottomStripHeight - 8 - 2);
+  const LIST_BORDER_HEIGHT = 2;
+  const availableListHeight = Math.max(4, rows - bottomStripHeight - 8 - 2 - LIST_BORDER_HEIGHT);
   const listHeight = Math.max(
     4,
     Math.min(desiredListHeight, preferredListHeight, availableListHeight)
   );
-  const inspectorHeight = Math.max(8, rows - listHeight - bottomStripHeight - 2);
+  const inspectorHeight = Math.max(8, rows - (listHeight + LIST_BORDER_HEIGHT) - bottomStripHeight - 2);
   // Same formula as Inspector — the reducer needs it so it can clamp scrolls.
   const inspectorMaxLines = Math.max(3, inspectorHeight - 6);
   const content = getContent(state, state.selectedSlug);
@@ -2643,14 +2567,19 @@ export function App({ mainBranch = "main" }: AppProps) {
         filterQuery={state.filterQuery}
         width={cols - 2}
       />
-      <Box flexDirection="column" height={listHeight}>
+      <Box
+        flexDirection="column"
+        height={listHeight + LIST_BORDER_HEIGHT}
+        borderStyle="single"
+        borderDimColor
+      >
         <TaskList
           tasks={visibleTasks}
           selectedSlug={state.selectedSlug}
           totalTasks={state.tasks.length}
           filterQuery={state.filterQuery}
           density={state.listDensity}
-          width={cols - 2}
+          width={cols - 4}
           height={listHeight}
           overlaps={state.taskOverlaps}
         />
@@ -2763,28 +2692,6 @@ export function App({ mainBranch = "main" }: AppProps) {
                 state.mode === "closingAll"
               }
               targetBranch={targetBranch}
-            />
-          ) : showSendInput ? (
-            <SendInputPrompt
-              slug={state.selectedSlug ?? ""}
-              value={state.sendInputValue}
-              busy={state.mode === "sending"}
-              onChange={(v) =>
-                dispatch({ type: "sendInput/setValue", value: v })
-              }
-              onSubmit={(v) => {
-                const slug = state.selectedSlug;
-                if (!slug) {
-                  dispatch({ type: "mode/list" });
-                  return;
-                }
-                const text = v;
-                if (!text.trim()) {
-                  dispatch({ type: "mode/list" });
-                  return;
-                }
-                void doSendInput(slug, text);
-              }}
             />
           ) : showContinuePrompt ? (
             <ContinuePrompt
