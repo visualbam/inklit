@@ -113,6 +113,19 @@ export async function renameOwnPane(name) {
         // rename-pane without --pane-id support (older zellij) — OSC already fired.
     }
 }
+export async function renamePaneById(paneId, name) {
+    if (!inSession())
+        return;
+    try {
+        await execa("zellij", ["action", "rename-pane", name, "-p", paneId], {
+            reject: true,
+            timeout: 1000,
+        });
+    }
+    catch {
+        // Older zellij without targeted rename-pane — silently skip.
+    }
+}
 /** Refocus inklit's own pane after actions that had to focus another pane. */
 export async function focusOwnPane() {
     const home = ourPaneId();

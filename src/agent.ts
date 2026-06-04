@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { spawnPane } from "./zellij.js";
+import { spawnPane, renamePaneById } from "./zellij.js";
 import { slugify } from "./wt.js";
+import { generateSlug } from "./ai.js";
 import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
 import type { AgentKind } from "./model.js";
@@ -84,6 +85,11 @@ export async function spawnAgent(opts: {
   // poll tick can read it from disk (~5-20ms cost; spawn already takes
   // hundreds of ms because zellij + wt + agent boot).
   await recordSpawn(slug, opts.agent, paneId).catch(() => {});
+  if (paneId) {
+    void generateSlug(opts.description)
+      .then((aiSlug) => renamePaneById(paneId, aiSlug))
+      .catch(() => {});
+  }
   void refreshTaskPreview(slug, opts.cwd).catch(() => {});
   if (opts.agent === "claude") {
     void scheduleStopHook(slug, mainPath + "." + slug);

@@ -132,4 +132,24 @@ Return ONLY a JSON array of task description strings with no other text:
         .slice(0, 5)
         .map((s) => String(s).trim());
 }
+/**
+ * Call Claude to generate a concise kebab-case slug (3-5 words, ≤30 chars)
+ * summarizing the task description. Throws on failure so callers can fall back.
+ */
+export async function generateSlug(description) {
+    const prompt = `Summarize this coding task as a short git branch name. Use 3-5 words in kebab-case, 30 characters max. Return ONLY the branch name, nothing else.
+
+Task: "${description}"`;
+    const raw = await claudeQuery(prompt);
+    const slug = raw
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 30)
+        .replace(/-+$/g, "");
+    if (!slug)
+        throw new AiError("Empty slug from claude");
+    return slug;
+}
 //# sourceMappingURL=ai.js.map

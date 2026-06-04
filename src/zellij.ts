@@ -142,6 +142,18 @@ export async function renameOwnPane(name: string): Promise<void> {
   }
 }
 
+export async function renamePaneById(paneId: string, name: string): Promise<void> {
+  if (!inSession()) return;
+  try {
+    await execa("zellij", ["action", "rename-pane", name, "-p", paneId], {
+      reject: true,
+      timeout: 1000,
+    });
+  } catch {
+    // Older zellij without targeted rename-pane — silently skip.
+  }
+}
+
 /** Refocus inklit's own pane after actions that had to focus another pane. */
 export async function focusOwnPane(): Promise<boolean> {
   const home = ourPaneId();
