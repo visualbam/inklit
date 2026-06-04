@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 20px;
+      background: #1a1a2e;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      line-height: 1.6;
+    }
+
+    main {
+      width: min(100%, 680px);
+      padding: 32px;
+      background: #16213e;
+      border: 2px solid #0f3460;
+      border-radius: 8px;
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+    }
+
+    h1 {
+      margin-bottom: 16px;
+      color: #a0c4ff;
+      font-size: 2rem;
+      letter-spacing: 0.04em;
+    }
+
+    p + p {
+      margin-top: 12px;
+    }
+
+    a {
+      display: inline-block;
+      margin-top: 24px;
+      color: #4ecdc4;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    a:hover,
+    a:focus {
+      color: #a0c4ff;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>About This Site</h1>
+    <p>
+      This page was created as a simple companion to the Tic Tac Toe game on the
+      home page.
+    </p>
+    <p>
+      It uses the same dark visual style so the pages feel connected while
+      keeping the markup small and easy to maintain.
+    </p>
+    <a href="index.html">Back to the game</a>
+  </main>
+</body>
+</html>
