@@ -1907,7 +1907,7 @@ export function App({ mainBranch = "main" }: AppProps) {
     }
 
     dispatch({ type: "flash", message: "Starting preview server…" });
-    await refreshTaskPreview(task.slug).catch(() => {});
+    await refreshTaskPreview(task.slug, process.cwd()).catch(() => {});
     const records = await loadAll().catch(() => ({})) as Record<string, { preview?: { url?: string } }>;
     const url = records[task.slug]?.preview?.url;
     if (url) {
