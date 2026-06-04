@@ -66,7 +66,7 @@ import {
   signalDir,
   type TaskRecord,
 } from "../state.js";
-import { clearTaskPreview, openPreviewInBrowser } from "../preview.js";
+import { clearTaskPreview, openPreviewInBrowser, refreshTaskPreview } from "../preview.js";
 import { notify } from "../notify.js";
 import type {
   AgentKind,
@@ -1847,6 +1847,10 @@ export function App({ mainBranch = "main" }: AppProps) {
         void doArchiveSelected();
         return;
       }
+      if (input === "p") {
+        void doOpenPreview();
+        return;
+      }
       if (input === "i") {
         requestSendSelected();
         return;
@@ -1894,12 +1898,24 @@ export function App({ mainBranch = "main" }: AppProps) {
 
   async function doOpenPreview() {
     const task = state.tasks.find(t => t.slug === state.selectedSlug) ?? null;
-    if (!task?.preview?.url) {
-      dispatch({ type: "flash", message: "No preview available for this task." });
+    if (!task) return;
+
+    if (task.preview?.url) {
+      await openPreviewInBrowser(task.preview.url).catch(() => {});
+      dispatch({ type: "flash", message: `Opening ${task.preview.url}` });
       return;
     }
-    await openPreviewInBrowser(task.preview.url).catch(() => {});
-    dispatch({ type: "flash", message: `Opening ${task.preview.url}` });
+
+    dispatch({ type: "flash", message: "Starting preview server…" });
+    await refreshTaskPreview(task.slug).catch(() => {});
+    const records = await loadAll().catch(() => ({})) as Record<string, { preview?: { url?: string } }>;
+    const url = records[task.slug]?.preview?.url;
+    if (url) {
+      await openPreviewInBrowser(url).catch(() => {});
+      dispatch({ type: "flash", message: `Opening ${url}` });
+    } else {
+      dispatch({ type: "flash", message: "Could not start a preview server for this task." });
+    }
   }
 
   function refreshBoard() {

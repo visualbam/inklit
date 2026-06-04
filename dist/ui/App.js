@@ -28,7 +28,7 @@ import { sessionAlive, capturePane as tmuxCapturePane, sendKeys as tmuxSendKeys,
 import { spawnAgent, resumeAgent, removeTaskSummary } from "../agent.js";
 import { extractClipboardImage, extractClipboardImageSync } from "../clipboard.js";
 import { getAgent, loadAll, recordRemove, recordLifecycle, recordTaskFailure, recordTaskOperation, recordListDensity, loadUiPrefs, snapshotTask, clearStaleApplyOperations, signalDir, } from "../state.js";
-import { clearTaskPreview, openPreviewInBrowser } from "../preview.js";
+import { clearTaskPreview, openPreviewInBrowser, refreshTaskPreview } from "../preview.js";
 import { notify } from "../notify.js";
 import { initialState, lifecycleForTask } from "../model.js";
 const EMPTY_CONTENT = { diff: "", log: "", agent: "", files: [] };
@@ -1600,6 +1600,10 @@ export function App({ mainBranch = "main" }) {
             void doArchiveSelected();
             return;
         }
+        if (input === "p") {
+            void doOpenPreview();
+            return;
+        }
         if (input === "i") {
             requestSendSelected();
             return;
@@ -1636,12 +1640,24 @@ export function App({ mainBranch = "main" }) {
     }
     async function doOpenPreview() {
         const task = state.tasks.find(t => t.slug === state.selectedSlug) ?? null;
-        if (!task?.preview?.url) {
-            dispatch({ type: "flash", message: "No preview available for this task." });
+        if (!task)
+            return;
+        if (task.preview?.url) {
+            await openPreviewInBrowser(task.preview.url).catch(() => { });
+            dispatch({ type: "flash", message: `Opening ${task.preview.url}` });
             return;
         }
-        await openPreviewInBrowser(task.preview.url).catch(() => { });
-        dispatch({ type: "flash", message: `Opening ${task.preview.url}` });
+        dispatch({ type: "flash", message: "Starting preview server…" });
+        await refreshTaskPreview(task.slug).catch(() => { });
+        const records = await loadAll().catch(() => ({}));
+        const url = records[task.slug]?.preview?.url;
+        if (url) {
+            await openPreviewInBrowser(url).catch(() => { });
+            dispatch({ type: "flash", message: `Opening ${url}` });
+        }
+        else {
+            dispatch({ type: "flash", message: "Could not start a preview server for this task." });
+        }
     }
     function refreshBoard() {
         fetchedRef.current.clear();
