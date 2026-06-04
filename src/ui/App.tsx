@@ -40,25 +40,21 @@ import {
 } from "../wt.js";
 import { computeOverlaps } from "../overlap.js";
 import { fetchAiFollowUps } from "../ai.js";
+import { inSession } from "../zellij.js";
 import {
-  inSession,
-  dumpScreen,
-  focusPaneByName,
-  focusPaneId,
-  focusOwnPane,
-  closePaneByName,
-  closePaneById,
-  sendKeysToPaneId,
-  sendKeysToSlug,
-  panesSnapshot,
-} from "../zellij.js";
+  sessionAlive,
+  capturePane as tmuxCapturePane,
+  sendKeys as tmuxSendKeys,
+  killSession as tmuxKillSession,
+  openFloat as tmuxOpenFloat,
+  killAllSessions as tmuxKillAllSessions,
+  listSessions as tmuxListSessions,
+} from "../tmux.js";
 import { spawnAgent, resumeAgent, removeTaskSummary } from "../agent.js";
 import { extractClipboardImage, extractClipboardImageSync } from "../clipboard.js";
 import {
   getAgent,
   loadAll,
-  recordPane,
-  clearPane,
   recordRemove,
   recordLifecycle,
   recordTaskFailure,
@@ -703,7 +699,6 @@ const PROJECT_POLL_MS = 2500;
 const SCREEN_TICK_MS = 750;
 const SELECTED_SCREEN_POLL_MS = 1000;
 const BACKGROUND_SCREEN_POLL_MS = 2000;
-const DUMP_SCREEN_TIMEOUT_MS = 700;
 const AGENT_TAIL_LINES = 200;
 const REVIEW_STATS_TICK_MS = 2500;
 const REVIEW_STATS_POLL_MS = 10_000;
@@ -968,7 +963,7 @@ export function App({ mainBranch = "main" }: AppProps) {
     };
   }, []);
 
-  // Poll wt + zellij pane metadata only. Pane screen dumps are throttled in a
+  // Poll wt + tmux session liveness. Pane screen dumps are throttled in a
   // separate sampler below so a few active agents cannot stall dashboard input.
   useEffect(() => {
     let cancelled = false;
@@ -991,55 +986,28 @@ export function App({ mainBranch = "main" }: AppProps) {
         timer = null;
       }
       try {
-        // One worktrunk snapshot + one `zellij list-panes` + one state-file
-        // read per tick. Pane lookup per task is then prefer-by-id (stable),
-        // fall-back-to-title (works only before the agent OSC-rewrites it).
-        const [project, panes, records] = await Promise.all([
+        // One worktrunk snapshot + one state-file read per tick.
+        // Agent liveness is checked per-task via tmux has-session (fast).
+        const [project, records] = await Promise.all([
           listProject(),
-          panesSnapshot(),
           loadAll(),
         ]);
         const { tasks, mainVersion } = project;
         const agents = new Map<string, string>();
-        const adoptions: Array<[string, string]> = [];
-        const dropped: string[] = [];
         const refined = await Promise.all(
           tasks.map(async (t) => {
             try {
               const record = records[t.slug];
-              const recordedPaneId = record?.paneId;
-              // Primary: match by cwd. This is the only identifier that
-              // survives both OSC title rewrites (claude-code) and pane id
-              // churn (user closes pane and respawns). Worktree paths are
-              // unique per task, so collisions are impossible.
-              let pane = panes.byCwd.get(t.path);
-              // Secondary: stable paneId we recorded at spawn — works when
-              // cwd matching fails (e.g., agent chdir'd somewhere).
-              if (!pane && recordedPaneId) pane = panes.byId.get(recordedPaneId);
-              // Tertiary: title — only succeeds before OSC rewrite, so
-              // mostly catches just-spawned tasks.
-              if (!pane) {
-                const fallback = panes.byTitle.get(t.slug);
-                if (fallback) {
-                  pane = fallback;
-                  if (records[t.slug]) adoptions.push([t.slug, fallback.paneId]);
-                }
-              }
-              // Adopt paneId via cwd hit too, so the state file stays
-              // accurate even when ids change across sessions.
-              if (pane && records[t.slug] && recordedPaneId !== pane.paneId) {
-                adoptions.push([t.slug, pane.paneId]);
-              }
-              if (!pane) {
-                if (recordedPaneId) dropped.push(t.slug);
+              const alive = await sessionAlive(t.slug);
+              if (!alive) {
                 return applyPersistedLifecycle(
                   { ...t, state: "ready" as const, paneId: undefined },
                   record
                 );
               }
-              const paneId = pane.paneId;
+              // Session is alive — determine subststate from cached screen content.
               const cached = screenCacheRef.current.get(t.slug);
-              const screen = cached && cached.paneId === paneId ? cached.screen : "";
+              const screen = cached?.screen ?? "";
               const permReq = screen ? detectPermissionRequest(screen) : false;
               const waiting = !permReq && (screen ? detectWaiting(screen) : false);
               const liveState = permReq
@@ -1047,8 +1015,9 @@ export function App({ mainBranch = "main" }: AppProps) {
                 : waiting
                   ? ("waiting" as const)
                   : ("running" as const);
+              // paneId field repurposed to carry the slug (tmux session name).
               return applyPersistedLifecycle(
-                { ...t, state: liveState, paneId },
+                { ...t, state: liveState, paneId: t.slug },
                 record
               );
             } catch {
@@ -1056,13 +1025,6 @@ export function App({ mainBranch = "main" }: AppProps) {
             }
           })
         );
-        // Persist adoptions / drops sequentially after the tick. Best-effort.
-        for (const [slug, pid] of adoptions) {
-          await recordPane(slug, pid).catch(() => {});
-        }
-        for (const slug of dropped) {
-          await clearPane(slug).catch(() => {});
-        }
 
         // Idle promotion: hash each running pane's viewport; if unchanged for
         // IDLE_AFTER_MS, flip the task to `idle` and surface idleSeconds for
@@ -1077,8 +1039,7 @@ export function App({ mainBranch = "main" }: AppProps) {
             return t;
           }
           const cached = screenCacheRef.current.get(t.slug);
-          const screen =
-            cached && cached.paneId === t.paneId ? cached.screen : "";
+          const screen = cached?.screen ?? "";
           if (!screen) return t;
           const hash = createHash("sha1").update(screen).digest("hex");
           const prev = screenHashRef.current.get(t.slug);
@@ -1261,15 +1222,14 @@ export function App({ mainBranch = "main" }: AppProps) {
       if (background) toDump.push(background);
 
       for (const task of toDump) {
-        if (!task.paneId) continue;
         const prev = screenCacheRef.current.get(task.slug);
-        const screen = await dumpScreen(task.paneId, {
-          timeoutMs: DUMP_SCREEN_TIMEOUT_MS,
+        const screen = await tmuxCapturePane(task.slug, {
+          lines: AGENT_TAIL_LINES,
         });
         if (cancelled) return;
         if (!screen) continue;
         screenCacheRef.current.set(task.slug, {
-          paneId: task.paneId,
+          paneId: task.slug,
           screen,
           lastDumpMs: Date.now(),
         });
@@ -1963,9 +1923,8 @@ export function App({ mainBranch = "main" }: AppProps) {
       return;
     }
     if (task && isLivePane(task.state)) {
-      const focusP = task.paneId ? focusPaneId(task.paneId) : focusPaneByName(slug);
-      focusP.then((ok) => {
-        if (!ok) void enterResume(slug);
+      void tmuxOpenFloat(slug).then((paneId) => {
+        if (!paneId) void enterResume(slug);
       });
     } else {
       void enterResume(slug);
@@ -2043,13 +2002,13 @@ export function App({ mainBranch = "main" }: AppProps) {
 
   async function enterContinueWithPrompt(slug: string, prompt: string) {
     const task = state.tasks.find((t) => t.slug === slug);
-    if (task?.paneId) {
-      // Pane still alive — send directly instead of opening a second one.
-      const ok = await sendKeysToPaneId(task.paneId, prompt);
+    if (task && isLivePane(task.state)) {
+      // Session still alive — send directly without opening a float.
+      const ok = await tmuxSendKeys(slug, prompt);
       if (!ok) {
         dispatch({
           type: "error",
-          message: `Could not send to ${slug} — pane may have closed.`,
+          message: `Could not send to ${slug} — session may have ended.`,
         });
       }
     } else {
@@ -2127,42 +2086,6 @@ export function App({ mainBranch = "main" }: AppProps) {
     return true;
   }
 
-  /**
-   * Pick any live agent pane as the stack anchor. Excludes a slug we're
-   * about to operate on (resume) so we don't anchor onto a pane that's
-   * about to be replaced.
-   */
-  function pickStackAnchor(excludeSlug?: string): string | null {
-    for (const t of state.tasks) {
-      if (excludeSlug && t.slug === excludeSlug) continue;
-      if (!t.paneId) continue;
-      if (isLivePane(t.state)) return t.paneId;
-    }
-    return null;
-  }
-
-  async function collectPaneIdsForTask(task: Task): Promise<Set<string>> {
-    const ids = new Set<string>();
-    if (task.paneId) ids.add(task.paneId);
-    if (!inSess) return ids;
-    try {
-      const snapshot = await panesSnapshot();
-      const cwdHit = snapshot.byCwd.get(task.path);
-      if (cwdHit) ids.add(cwdHit.paneId);
-    } catch {
-      /* best-effort: the recorded paneId is still useful if zellij is busy */
-    }
-    return ids;
-  }
-
-  async function closePaneIds(ids: Set<string>): Promise<number> {
-    let closed = 0;
-    for (const id of ids) {
-      if (await closePaneById(id)) closed += 1;
-    }
-    if (closed > 0) await focusOwnPane().catch(() => false);
-    return closed;
-  }
 
   async function doSpawn(
     description: string,
@@ -2175,7 +2098,6 @@ export function App({ mainBranch = "main" }: AppProps) {
         description,
         agent,
         base: targetBranch === "main" ? undefined : targetBranch,
-        anchorPaneId: pickStackAnchor(),
         imagePaths,
       });
       dispatch({ type: "mode/list" });
@@ -2217,16 +2139,12 @@ export function App({ mainBranch = "main" }: AppProps) {
       type: "flash",
       message: `Merging ${slug} → ${targetBranch} in background.`,
     });
-    const paneIdsToClose = await collectPaneIdsForTask(task);
     await recordTaskOperation(slug, operation, snapshotTask(task)).catch(() => {});
     try {
       await mergeToMain(task.path, targetBranch, controller.signal);
       await clearTaskPreview(slug, task.preview).catch(() => {});
       await recordLifecycle(slug, "done", snapshotTask(task)).catch(() => {});
-      const closedPaneCount = await closePaneIds(paneIdsToClose);
-      if (closedPaneCount > 0 || paneIdsToClose.size === 0) {
-        await clearPane(slug).catch(() => {});
-      }
+      const killed = await tmuxKillSession(slug);
       const mergedTask: Task = {
         ...task,
         state: "merged",
@@ -2245,8 +2163,8 @@ export function App({ mainBranch = "main" }: AppProps) {
       dispatch({
         type: "flash",
         message:
-          closedPaneCount > 0
-            ? `Applied ${slug} → ${targetBranch} and closed pane.`
+          killed
+            ? `Applied ${slug} → ${targetBranch} and stopped agent.`
             : `Applied ${slug} → ${targetBranch}`,
       });
       refreshProjectRef.current();
@@ -2379,63 +2297,22 @@ export function App({ mainBranch = "main" }: AppProps) {
     exit();
   }
 
-  async function collectAgentPaneIds(): Promise<Set<string>> {
-    // Build the close set from EVERY signal we have, not just in-memory
-    // state — the poll loop's "is this pane live?" detection is fragile
-    // (title rewrites, stale paneIds) and we'd rather over-close than
-    // leak panes when the user explicitly asks to close all. The union of:
-    //   - in-memory task.paneId for live tasks
-    //   - state-file recorded paneIds (catches panes inklit spawned
-    //     even if the poll loop has lost track of them)
-    //   - zellij panes whose cwd matches any current worktree path
-    //     (catches panes whose recorded paneId is stale but the agent
-    //     is still running in the worktree)
-    const toClose = new Set<string>();
-    for (const t of state.tasks) {
-      if (t.paneId && isLivePane(t.state)) toClose.add(t.paneId);
-    }
-    try {
-      const records = await loadAll();
-      const snapshot = await panesSnapshot();
-      for (const slug of Object.keys(records)) {
-        const pid = records[slug]?.paneId;
-        if (pid && snapshot.byId.has(pid)) toClose.add(pid);
-      }
-      for (const t of state.tasks) {
-        const cwdHit = snapshot.byCwd.get(t.path);
-        if (cwdHit) toClose.add(cwdHit.paneId);
-      }
-    } catch {
-      /* best-effort augmentation; fall through with whatever we have */
-    }
-    return toClose;
-  }
-
   async function doCloseAllPanes() {
     if (closingAllRef.current) return;
     closingAllRef.current = true;
     dispatch({ type: "mode/closingAll" });
     try {
-      const toClose = await collectAgentPaneIds();
-      if (toClose.size === 0) {
+      const sessions = await tmuxListSessions();
+      if (sessions.length === 0) {
         dispatch({ type: "mode/list" });
-        dispatch({ type: "flash", message: "No live agent panes found." });
+        dispatch({ type: "flash", message: "No live agent sessions found." });
         return;
       }
-      // Sequential — zellij re-arranges layout per close, and parallel calls
-      // produced inconsistent results in informal testing.
-      for (const id of toClose) {
-        try {
-          await closePaneById(id);
-        } catch {
-          /* swallow */
-        }
-      }
-      await focusOwnPane().catch(() => false);
+      const killed = await tmuxKillAllSessions();
       dispatch({ type: "mode/list" });
       dispatch({
         type: "flash",
-        message: `Closed ${toClose.size} live agent pane${toClose.size === 1 ? "" : "s"}.`,
+        message: `Stopped ${killed} agent session${killed === 1 ? "" : "s"}.`,
       });
     } catch (err) {
       dispatch({ type: "mode/list" });
@@ -2451,10 +2328,7 @@ export function App({ mainBranch = "main" }: AppProps) {
   async function doSendInput(slug: string, text: string) {
     dispatch({ type: "mode/sending" });
     try {
-      const task = state.tasks.find((t) => t.slug === slug);
-      const ok = task?.paneId
-        ? await sendKeysToPaneId(task.paneId, text)
-        : await sendKeysToSlug(slug, text);
+      const ok = await tmuxSendKeys(slug, text);
       dispatch({ type: "mode/list" });
       if (ok) {
         const preview = text.length > 30 ? text.slice(0, 30) + "…" : text;
@@ -2481,14 +2355,7 @@ export function App({ mainBranch = "main" }: AppProps) {
     dispatch({ type: "mode/killing" });
     try {
       const task = state.tasks.find((t) => t.slug === slug);
-      if (inSess) {
-        if (task?.paneId) {
-          await closePaneById(task.paneId);
-        } else {
-          // Legacy slug or not yet observed — fall back to title lookup.
-          await closePaneByName(slug);
-        }
-      }
+      await tmuxKillSession(slug).catch(() => {});
       await clearTaskPreview(slug, task?.preview).catch(() => {});
       await removeWorktree(slug);
       // Drop the state-file entry so a future task with the same slug
@@ -2522,31 +2389,27 @@ export function App({ mainBranch = "main" }: AppProps) {
   async function doResume(slug: string, agent: AgentKind, followUpPrompt?: string) {
     dispatch({ type: "mode/resuming" });
     try {
-      const { paneId } = await resumeAgent({
-        slug,
-        agent,
-        anchorPaneId: pickStackAnchor(slug),
-      });
+      await resumeAgent({ slug, agent });
 
       dispatch({ type: "mode/list" });
       dispatch({ type: "flash", message: `Resumed ${slug} (${agent})` });
 
-      if (followUpPrompt && paneId) {
-        // Fire-and-forget: wait for Claude's prompt then inject the follow-up.
+      if (followUpPrompt) {
+        // Fire-and-forget: wait for agent's prompt then inject the follow-up.
         void (async () => {
           const deadline = Date.now() + 30_000;
           let sent = false;
           while (Date.now() < deadline) {
             await new Promise<void>((r) => setTimeout(r, 600));
-            const screen = await dumpScreen(paneId);
+            const screen = await tmuxCapturePane(slug);
             if (detectWaiting(screen)) {
-              await sendKeysToPaneId(paneId, followUpPrompt);
+              await tmuxSendKeys(slug, followUpPrompt);
               sent = true;
               break;
             }
           }
           if (!sent) {
-            await sendKeysToPaneId(paneId, followUpPrompt);
+            await tmuxSendKeys(slug, followUpPrompt);
           }
         })();
       }
@@ -2687,7 +2550,6 @@ export function App({ mainBranch = "main" }: AppProps) {
                     description: desc,
                     agent: "claude",
                     base: targetBranch === "main" ? undefined : targetBranch,
-                    anchorPaneId: pickStackAnchor(),
                   }).catch(() => {});
                 }
                 dispatch({ type: "mode/list" });

@@ -64,7 +64,6 @@ export async function runSpawnCommand(args, opts = {}) {
     if (requests.length === 0) {
         throw new Error("No tasks to spawn");
     }
-    let anchorPaneId = null;
     const spawned = [];
     for (const req of requests) {
         const res = await spawnAgent({
@@ -73,14 +72,11 @@ export async function runSpawnCommand(args, opts = {}) {
             branch: req.branch,
             base: req.base,
             cwd: req.cwd,
-            anchorPaneId,
         });
-        anchorPaneId = res.paneId ?? anchorPaneId;
         spawned.push({
             branch: res.slug,
             agent: req.agent,
             base: req.base,
-            paneId: res.paneId,
         });
     }
     if (parsed.format === "json") {
@@ -89,8 +85,7 @@ export async function runSpawnCommand(args, opts = {}) {
     else {
         for (const task of spawned) {
             const base = task.base ? ` from ${task.base}` : "";
-            const pane = task.paneId ? ` (${task.paneId})` : "";
-            console.log(`spawned ${task.branch}${base} with ${task.agent}${pane}`);
+            console.log(`spawned ${task.branch}${base} with ${task.agent}`);
         }
     }
     return 0;

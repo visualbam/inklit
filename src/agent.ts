@@ -1,10 +1,9 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { spawnPane, renamePaneById } from "./zellij.js";
 import { slugify } from "./wt.js";
-import { generateSlug } from "./ai.js";
 import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
+import { spawnSession } from "./tmux.js";
 import type { AgentKind } from "./model.js";
 
 const INKLIT_INSTRUCTION = (tasksDir: string, slug: string) =>
@@ -22,17 +21,13 @@ export async function removeTaskSummary(slug: string, cwd?: string): Promise<voi
 
 export interface SpawnResult {
   slug: string;
-  paneId: string | null;
 }
 
 /**
- * Spawn a new agent task in its own worktree + zellij pane.
+ * Spawn a new agent task in its own worktree + headless tmux session.
  *
- * Composes one shell-free command:
- *   zellij action new-pane -n <slug> -- wt switch -c [--base <base>] <slug> -x <agent> -- <agent args>
- *
- * worktrunk handles worktree creation and `cd`; the agent inherits that cwd
- * and receives the description as its first prompt.
+ * The agent runs invisibly — no zellij pane or tab is created.
+ * Use tmux.openFloat(slug) to attach interactively when needed.
  */
 export async function spawnAgent(opts: {
   description: string;
@@ -42,8 +37,6 @@ export async function spawnAgent(opts: {
   /** Optional base branch/ref passed through to `wt switch --base`. */
   base?: string;
   cwd?: string;
-  /** Optional pane id of an existing agent to stack onto. */
-  anchorPaneId?: string | null;
   /** Paths to image files to include as context in the initial prompt. */
   imagePaths?: string[];
 }): Promise<SpawnResult> {
@@ -66,54 +59,24 @@ export async function spawnAgent(opts: {
     switchArgs.push(slug, "-x", "claude", "--", ...launchArgsFor("claude", effectiveDescription));
   } else {
     const wrapPath = await ensureWrapper();
-    // Wrapper's $@ must be a complete command: agent binary + its args.
-    // baseDescription carries the image-context section so codex/opencode get
-    // the same pasted-image paths claude does.
     const agentArgs = [opts.agent, ...launchArgsFor(opts.agent, baseDescription)];
     switchArgs = wrappedAgentSwitchArgs(slug, true, opts.base, agentArgs, wrapPath);
   }
 
-  const paneId = await spawnPane({
-    name: slug,
-    command: "wt",
-    args: switchArgs,
-    cwd: opts.cwd,
-    anchorPaneId: opts.anchorPaneId,
-  });
-  // Record agent kind + paneId so resume + poll-loop pane lookup work even
-  // after claude-code OSC-rewrites the pane title. Awaited so the next
-  // poll tick can read it from disk (~5-20ms cost; spawn already takes
-  // hundreds of ms because zellij + wt + agent boot).
-  await recordSpawn(slug, opts.agent, paneId).catch(() => {});
-  if (paneId) {
-    void generateSlug(opts.description)
-      .then((aiSlug) => renamePaneById(paneId, aiSlug))
-      .catch(() => {});
-  }
+  await spawnSession(slug, "wt", switchArgs, opts.cwd);
+  await recordSpawn(slug, opts.agent, slug).catch(() => {});
   void refreshTaskPreview(slug, opts.cwd).catch(() => {});
   if (opts.agent === "claude") {
     void scheduleStopHook(slug, mainPath + "." + slug);
   }
-  return { slug, paneId };
+  return { slug };
 }
 
-/**
- * Resume an existing agent session in a fresh zellij pane. The worktree
- * already exists (we don't pass `-c` to `wt switch`), and we hand the agent
- * its CLI-specific resume incantation so it picks up the prior session
- * stored under that cwd.
- *
- *   claude --permission-mode bypassPermissions --continue
- *   codex --ask-for-approval never resume --last
- */
+/** Resume an existing agent session in a fresh headless tmux session. */
 export async function resumeAgent(opts: {
   slug: string;
   agent: AgentKind;
   cwd?: string;
-  /** Optional pane id of an existing agent to stack onto. */
-  anchorPaneId?: string | null;
-  /** Additional instruction sent to the agent after it starts (via send-keys). */
-  followUpPrompt?: string;
 }): Promise<SpawnResult> {
   let switchArgs: string[];
   if (opts.agent === "claude") {
@@ -127,20 +90,14 @@ export async function resumeAgent(opts: {
     switchArgs = wrappedAgentSwitchArgs(opts.slug, false, undefined, agentArgs, wrapPath);
   }
 
-  const paneId = await spawnPane({
-    name: opts.slug,
-    command: "wt",
-    args: switchArgs,
-    cwd: opts.cwd,
-    anchorPaneId: opts.anchorPaneId,
-  });
-  await recordResume(opts.slug, opts.agent, paneId).catch(() => {});
+  await spawnSession(opts.slug, "wt", switchArgs, opts.cwd);
+  await recordResume(opts.slug, opts.agent, opts.slug).catch(() => {});
   void refreshTaskPreview(opts.slug, opts.cwd).catch(() => {});
   if (opts.agent === "claude") {
     const mainPath = opts.cwd ?? process.cwd();
     void scheduleStopHook(opts.slug, mainPath + "." + opts.slug);
   }
-  return { slug: opts.slug, paneId };
+  return { slug: opts.slug };
 }
 
 export function launchArgsFor(agent: AgentKind, description: string): string[] {

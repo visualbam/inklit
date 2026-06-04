@@ -1,13 +1,14 @@
 # inklit
 
 A terminal dashboard for managing parallel AI coding agents (Claude Code, Codex
-CLI) that each run in their own git worktree. It sits in a Zellij pane next to
-your editor and the agent panes themselves — think "Replit-style task list,
-scoped to git worktrees."
+CLI) that each run in their own git worktree. inklit runs as a TUI inside a
+Zellij pane; agents run headlessly in tmux sessions in the background. Pressing
+`enter` on a task opens a Zellij floating pane that attaches to the agent's
+tmux session — think "Replit-style task list, scoped to git worktrees."
 
 It is a thin presentation layer over [worktrunk](https://worktrunk.dev) (the
 `wt` CLI). Worktrunk handles all worktree/branch operations. inklit handles
-the dashboard view and Zellij integration.
+the dashboard view, Zellij integration, and tmux-based agent execution.
 
 In Replit terms, the local repo checkout is the **main version**. Agent tasks
 run in isolated worktrees and `m` applies a reviewed task back into that main
@@ -25,6 +26,7 @@ bunch of features are intentionally stubbed — see the TODO list below.
 | Node.js     | 25.9.0         |
 | `wt`        | 0.48.0         |
 | `zellij`    | 0.44.2         |
+| `tmux`      | any            |
 | `claude` or `codex` CLI | any (the agent CLI you spawn) |
 
 You can run inklit outside zellij — the list will render read-only. Spawning
@@ -104,7 +106,6 @@ inklit spawn --file tasks.json --format json
 ]
 ```
 
-`inklit spawn` must run inside a zellij session because it creates zellij panes.
 Use `--cwd <repo>` when the calling process is outside the target checkout.
 Headless and dashboard-spawned agents both use no-prompt permission modes so
 the pane keeps moving instead of waiting for approval: Claude gets
@@ -132,7 +133,7 @@ Movement is Vim/Helix-flavored.
 | `n`      | new task — prompts for description, then agent (`c`/`x`)  |
 | `T` / `1` | start the top suggested next task for the selected task  |
 | `2`      | start the second suggested next task when shown            |
-| `enter`  | running/waiting → focus pane; ready → resume agent         |
+| `enter`  | running/waiting → open a Zellij float attached to the agent's tmux session; ready → resume agent in a new tmux session |
 | `i`      | send a one-line message into the selected agent's pane (Enter sends + presses return; esc cancels) |
 | `q` / `Ctrl-C` | exit the dashboard only; live agents keep running in zellij |
 | `Q`      | close all live agent panes after confirmation; worktrees survive |
@@ -179,11 +180,11 @@ above or below instead of letting the inspector cover task rows.
 
 | Icon | Pane     | Meaning                                                  |
 | ---- | -------- | -------------------------------------------------------- |
-| ●    | running  | a zellij pane named after the slug is alive              |
-| ◐    | idle     | running pane whose viewport hasn't changed for ≥30s — labelled `idle 1m` etc. |
-| ✓    | no pane  | worktree exists, no live pane; `enter` resumes           |
+| ●    | running  | a tmux session named after the slug is alive             |
+| ◐    | idle     | running tmux session whose output hasn't changed for ≥30s — labelled `idle 1m` etc. |
+| ✓    | no pane  | worktree exists, no live tmux session; `enter` resumes   |
 | ↻    | merging  | background apply job is merging into the target branch   |
-| ⊙    | waiting  | running pane whose tail looks like a `(y/n)`/`?`/`❯` prompt |
+| ⊙    | waiting  | running tmux session whose tail looks like a `(y/n)`/`?`/`❯` prompt |
 | ✗    | failed   | apply failed or the task is otherwise marked failed; task view shows details |
 | ·    | applied  | task was applied and remains visible briefly before fade-out |
 
@@ -202,9 +203,9 @@ Linux/Windows for now.
 ## Architecture
 
 Single binary, no daemon. State lives in git + worktrunk; inklit does not
-duplicate it. The TUI polls `wt list --format json` and
-`zellij action list-panes --json` for cheap project status, then samples zellij
-pane screens on a separate throttled loop so active agents do not stall input.
+duplicate it. The TUI polls `wt list --format json`, `zellij action list-panes
+--json`, and `tmux -L inklit ls` for cheap project status, then captures tmux
+pane output on a separate throttled loop so active agents do not stall input.
 Compact review stats are sampled on a separate background loop too, so file
 counts do not block list navigation.
 
@@ -214,8 +215,9 @@ src/
   cli.ts           headless spawn command + global --main parsing
   model.ts         Task, AppState, action types
   wt.ts            wrapper over `wt list` (JSON) + git review helpers
-  zellij.ts        list-panes, dump-screen, focus-pane-id, new-pane
-  agent.ts         spawn helper — composes one zellij+wt invocation
+  zellij.ts        list-panes, open-float, focus-pane-id
+  tmux.ts          tmux session lifecycle — spawn, capture, status polling
+  agent.ts         spawn helper — composes one tmux+wt invocation
   ui/
     App.tsx        reducer, poll loop, key dispatch
     List.tsx       task list rendering
@@ -238,14 +240,15 @@ When you press `n`:
 
 1. Prompt for a description (Ink TextInput).
 2. Pick `c` (claude) or `x` (codex).
-3. We slugify the description and run, in one invocation:
+3. We slugify the description and run:
    ```
-   zellij action new-pane -n <slug> --close-on-exit -- \
+   tmux -L inklit new-session -d -s <slug> -- \
      wt switch -c <slug> -x <agent> -- <agent-permission-flags> "<description>"
    ```
-   That single command creates the worktree (worktrunk), launches the agent
-   inside it, and surfaces it as a named zellij pane. The next status poll
-   picks it up and shows it as `running`.
+   That creates the worktree (worktrunk) and launches the agent headlessly
+   inside a detached tmux session on the `inklit` server. The next status poll
+   picks it up and shows it as `running`. Press `enter` to open a Zellij
+   floating pane that attaches to the session.
 
 Inklit adds the agent-specific no-prompt permission flags automatically:
 `claude --permission-mode bypassPermissions ...` and
@@ -259,15 +262,15 @@ tasks pass that branch through as `wt switch --base <branch>`.
 ### Resume
 
 Closing an agent's zellij pane (or letting it exit) leaves the task in
-`✓ ready`. Press `enter` on a `ready` task and inklit will spawn a fresh
-pane in the existing worktree, running the agent's resume incantation:
+`✓ ready`. Press `enter` on a `ready` task and inklit will spawn a fresh tmux session
+in the existing worktree, running the agent's resume incantation:
 
 - **claude** → `claude --permission-mode bypassPermissions --continue`
 - **codex** → `codex --ask-for-approval never resume --last`
 
 The agent picks up its previous conversation; the worktree is unchanged so
 any uncommitted work is still there. The status bar verb on `enter` flips
-between `focus` (live pane) and `resume` (no pane) so you know which it'll do.
+between `view` (live tmux session) and `resume` (no session) so you know which it'll do.
 
 The agent kind is recorded at spawn time in
 `$XDG_STATE_HOME/inklit/tasks.json` (default `~/.local/state/...`). Tasks
@@ -293,9 +296,9 @@ The bottom half of the screen is the inspector. Toggle with `t`/`f`/`d`/`l`/`a`:
   plus per-untracked-file `git diff --no-index /dev/null <file>` so brand-new
   files render in unified format. Capped at ~200KB.
 - **`l` log** — `git log --oneline --decorate <target>..HEAD`.
-- **`a` agent** — last 200 lines of the agent's zellij pane via
-  `zellij action dump-screen -p <pane_id>`. The selected pane updates about
-  once per second; background panes are scanned more slowly for waiting/idle
+- **`a` agent** — last 200 lines of the agent's output via
+  `tmux -L inklit capture-pane -t <slug>`. The selected session updates about
+  once per second; background sessions are scanned more slowly for waiting/idle
   detection.
 
 The diff and files views also drive the apply flow: pressing `m` jumps

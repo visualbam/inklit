@@ -105,12 +105,10 @@ export async function runSpawnCommand(
     throw new Error("No tasks to spawn");
   }
 
-  let anchorPaneId: string | null = null;
   const spawned: Array<{
     branch: string;
     agent: AgentKind;
     base?: string;
-    paneId: string | null;
   }> = [];
 
   for (const req of requests) {
@@ -120,14 +118,11 @@ export async function runSpawnCommand(
       branch: req.branch,
       base: req.base,
       cwd: req.cwd,
-      anchorPaneId,
     });
-    anchorPaneId = res.paneId ?? anchorPaneId;
     spawned.push({
       branch: res.slug,
       agent: req.agent,
       base: req.base,
-      paneId: res.paneId,
     });
   }
 
@@ -136,8 +131,7 @@ export async function runSpawnCommand(
   } else {
     for (const task of spawned) {
       const base = task.base ? ` from ${task.base}` : "";
-      const pane = task.paneId ? ` (${task.paneId})` : "";
-      console.log(`spawned ${task.branch}${base} with ${task.agent}${pane}`);
+      console.log(`spawned ${task.branch}${base} with ${task.agent}`);
     }
   }
 

@@ -110,28 +110,25 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
     // Reserve roughly: rail+icon + stage + pane + age + review + spacing.
     const reviewCol = 18;
     const fixed = 55 + reviewCol;
-    const slugCol = Math.max(10, Math.floor((width - fixed) * 0.34));
-    const subjectCol = Math.max(8, width - fixed - slugCol - 2);
-    const divider = "─".repeat(Math.max(0, width - 2));
+    const slugCol = Math.max(10, width - fixed - 2);
+    const rule = "╌".repeat(Math.max(0, width - 2));
     let currentGroup = null;
     return (React.createElement(Box, { flexDirection: "column" },
         React.createElement(Box, { paddingX: 1 },
             React.createElement(Text, { dimColor: true },
-                pad("", 4),
+                "    ",
+                pad("TASK", slugCol),
                 " ",
-                pad("task", slugCol),
+                pad("STAGE", 8),
                 " ",
-                pad("subject", subjectCol),
+                pad("PANE", 9),
                 " ",
-                pad("stage", 8),
+                pad("REVIEW", reviewCol),
                 " ",
-                pad("pane", 9),
-                " ",
-                pad("review", reviewCol),
-                " ",
-                pad("age", 5))),
+                "  ",
+                pad("AGE", 5))),
         React.createElement(Box, { paddingX: 1 },
-            React.createElement(Text, { dimColor: true }, divider)),
+            React.createElement(Text, { dimColor: true }, rule)),
         hiddenAbove > 0 ? React.createElement(HiddenMarker, { count: hiddenAbove, direction: "above" }) : null,
         tasks.map((t) => {
             const group = groupForTask(t);
@@ -153,10 +150,8 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
                         React.createElement(Text, { bold: sel, color: color }, icon),
                         React.createElement(Text, null, " "),
                         React.createElement(Text, { bold: sel },
-                            pad(t.slug, slugCol),
+                            pad(t.error ?? t.slug, slugCol),
                             " "),
-                        React.createElement(Text, { bold: sel, dimColor: !sel }, pad(t.error ?? t.subject, subjectCol)),
-                        React.createElement(Text, null, " "),
                         React.createElement(Text, { bold: sel, color: lifecycleColor }, pad(lifecycleLabel, 8)),
                         React.createElement(Text, null, " "),
                         React.createElement(Text, { bold: sel, color: color }, pad(stateLabel, 9)),
@@ -179,7 +174,6 @@ function DetailedTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matche
 }
 function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matchedTaskCount, hiddenAbove, hiddenBelow, width, overlaps, }) {
     let currentGroup = null;
-    const subjectWidth = Math.max(8, width - 28);
     return (React.createElement(Box, { flexDirection: "column" },
         hiddenAbove > 0 ? React.createElement(HiddenMarker, { count: hiddenAbove, direction: "above" }) : null,
         tasks.map((t) => {
@@ -198,10 +192,7 @@ function CompactTaskList({ tasks, selectedSlug, totalTasks, filterQuery, matched
                         React.createElement(Text, null, " "),
                         React.createElement(Text, { bold: sel, color: color }, STATE_ICON[t.state]),
                         React.createElement(Text, null, " "),
-                        React.createElement(Text, { bold: sel }, truncate(t.slug, 18)),
-                        React.createElement(Text, { dimColor: !sel },
-                            " ",
-                            truncate(t.error ?? t.subject, subjectWidth)))),
+                        React.createElement(Text, { bold: sel }, truncate(t.error ?? t.slug, Math.max(18, width - 28))))),
                 React.createElement(Box, { paddingX: 1 },
                     React.createElement(Text, null,
                         React.createElement(Text, { color: sel ? UI.accent : UI.subtle }, " "),
@@ -259,7 +250,7 @@ function EmptyBoard({ filterQuery, totalTasks, }) {
             "command palette \u00B7 ",
             React.createElement(Text, { color: UI.accent }, "?"),
             " help"),
-        React.createElement(Text, { dimColor: true }, "Agents run in zellij panes; quitting this board leaves them running."),
+        React.createElement(Text, { dimColor: true }, "Agents run headlessly in tmux; quitting this board leaves them running."),
         totalTasks > 0 ? (React.createElement(Text, { dimColor: true }, "Archived tasks are hidden. Press z to show them.")) : null));
 }
 function GroupHeader({ group }) {
@@ -276,13 +267,10 @@ function groupForTask(task) {
     }
     switch (task.state) {
         case "permission":
-            return { key: "permission", label: "Permission", color: UI.danger };
         case "waiting":
-            return { key: "waiting", label: "Waiting", color: UI.warning };
         case "running":
-            return { key: "running", label: "Running", color: UI.accent };
         case "idle":
-            return { key: "idle", label: "Idle", color: UI.info };
+            return { key: "active", label: "Active", color: UI.accent };
         case "merging":
             return { key: "merging", label: "Merging", color: UI.warning };
         case "ready":
