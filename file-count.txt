@@ -1,0 +1,12 @@
+Files in project root directory: 10
+
+.DS_Store
+.gitignore
+AGENTS.md
+index.html
+package-lock.json
+package.json
+project-files.html
+README.md
+test.html
+tsconfig.json
