@@ -4,8 +4,35 @@ import { slugify } from "./wt.js";
 import { recordSpawn, recordResume, signalPath, ensureWrapper } from "./state.js";
 import { refreshTaskPreview } from "./preview.js";
 import { spawnSession } from "./tmux.js";
-const INKLIT_INSTRUCTION = (tasksDir, slug) => `\n\n---\nBefore starting: check ${tasksDir}/ for prior-task summaries and read any that seem relevant.\nWhen done: write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed.`;
-const INKLIT_RESUME_REMINDER = (tasksDir, slug) => `Resuming task. Reminder: when done, write a compact summary to ${tasksDir}/${slug}.md — goal, outcome (2–3 sentences), key files changed. Check other summaries in ${tasksDir}/ if relevant context is missing.`;
+const INKLIT_INSTRUCTION = (tasksDir, slug) => `
+
+---
+Inklit task instructions:
+
+Before starting:
+- Read ${tasksDir}/ for prior-task summaries relevant to this work
+- If .inklit/project.md exists, read it for project context and conventions
+- Always use relative paths from the project root — never absolute paths
+
+While working:
+- Analyze the root cause of problems before making changes — do not simplify or work around issues
+- If you hit the same failure 3 times in a row, stop and clearly describe the blocker instead of retrying
+
+When done, write a compact summary to ${tasksDir}/${slug}.md:
+  ## Goal
+  [one sentence]
+  ## Outcome
+  [2–3 sentences: what was done and the result]
+  ## Key files changed
+  [bullet list]
+  ## What's next
+  [follow-up work, open questions, or "none" if fully complete]`;
+const INKLIT_RESUME_REMINDER = (tasksDir, slug) => `Resuming task. Reminders:
+- If you hit the same failure 3 times in a row, stop and describe the blocker clearly instead of retrying
+- Analyze root cause before making changes — do not work around problems
+- Always use relative paths from the project root
+- Check ${tasksDir}/ for prior-task summaries if context is missing
+- When done, write a compact summary to ${tasksDir}/${slug}.md (Goal / Outcome / Key files changed / What's next)`;
 /** Remove the .inklit task summary for a killed/abandoned task. No-op if not found. */
 export async function removeTaskSummary(slug, cwd) {
     const mainPath = cwd ?? process.cwd();
