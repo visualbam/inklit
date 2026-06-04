@@ -237,8 +237,7 @@ function DetailedTaskList({
   // Reserve roughly: rail+icon + stage + pane + age + review + spacing.
   const reviewCol = 18;
   const fixed = 55 + reviewCol;
-  const slugCol = Math.max(10, Math.floor((width - fixed) * 0.34));
-  const subjectCol = Math.max(8, width - fixed - slugCol - 2);
+  const slugCol = Math.max(10, width - fixed - 2);
   const divider = "─".repeat(Math.max(0, width - 2));
   let currentGroup: string | null = null;
 
@@ -246,7 +245,7 @@ function DetailedTaskList({
     <Box flexDirection="column">
       <Box paddingX={1}>
         <Text dimColor>
-          {pad("", 4)} {pad("task", slugCol)} {pad("subject", subjectCol)}{" "}
+          {pad("", 4)} {pad("task", slugCol)}{" "}
           {pad("stage", 8)} {pad("pane", 9)} {pad("review", reviewCol)}{" "}
           {pad("age", 5)}
         </Text>
@@ -280,12 +279,8 @@ function DetailedTaskList({
                 </Text>
                 <Text> </Text>
                 <Text bold={sel}>
-                  {pad(t.slug, slugCol)}{" "}
+                  {pad(t.error ?? t.slug, slugCol)}{" "}
                 </Text>
-                <Text bold={sel} dimColor={!sel}>
-                  {pad(t.error ?? t.subject, subjectCol)}
-                </Text>
-                <Text> </Text>
                 <Text bold={sel} color={lifecycleColor}>
                   {pad(lifecycleLabel, 8)}
                 </Text>
@@ -339,7 +334,6 @@ function CompactTaskList({
   hiddenBelow: number;
 }) {
   let currentGroup: string | null = null;
-  const subjectWidth = Math.max(8, width - 28);
   return (
     <Box flexDirection="column">
       {hiddenAbove > 0 ? <HiddenMarker count={hiddenAbove} direction="above" /> : null}
@@ -362,8 +356,7 @@ function CompactTaskList({
                   {STATE_ICON[t.state]}
                 </Text>
                 <Text> </Text>
-                <Text bold={sel}>{truncate(t.slug, 18)}</Text>
-                <Text dimColor={!sel}> {truncate(t.error ?? t.subject, subjectWidth)}</Text>
+                <Text bold={sel}>{truncate(t.error ?? t.slug, Math.max(18, width - 28))}</Text>
               </Text>
             </Box>
             <Box paddingX={1}>
@@ -468,13 +461,10 @@ function groupForTask(task: Task): TaskGroup {
   }
   switch (task.state) {
     case "permission":
-      return { key: "permission", label: "Permission", color: UI.danger };
     case "waiting":
-      return { key: "waiting", label: "Waiting", color: UI.warning };
     case "running":
-      return { key: "running", label: "Running", color: UI.accent };
     case "idle":
-      return { key: "idle", label: "Idle", color: UI.info };
+      return { key: "active", label: "Active", color: UI.accent };
     case "merging":
       return { key: "merging", label: "Merging", color: UI.warning };
     case "ready":
